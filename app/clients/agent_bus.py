@@ -72,6 +72,17 @@ class AgentBusClient:
         path = f"/work-items/{quote(work_item_id, safe='')}/evidence"
         return await self._post_object(path, payload)
 
+    async def create_review_packet(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post_object("/review-packets", payload)
+
+    async def get_review_packet(self, review_id: str) -> dict[str, Any]:
+        path = f"/review-packets/{quote(review_id, safe='')}"
+        return await self._get_object(path)
+
+    async def attach_review_to_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        path = f"/work-items/{quote(work_item_id, safe='')}/review"
+        return await self._post_object(path, payload)
+
     async def _post_object(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self._base_url:
             raise MissingAgentBusBaseUrlError("AGENT_BUS_BASE_URL is required for Agent Bus dispatch.")
