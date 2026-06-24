@@ -61,6 +61,18 @@ class AgentBusClient:
         path = f"/work-items/{quote(work_item_id, safe='')}"
         return await self._get_object(path)
 
+    async def claim_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        path = f"/work-items/{quote(work_item_id, safe='')}/claim"
+        return await self._post_object(path, payload)
+
+    async def transition_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        path = f"/work-items/{quote(work_item_id, safe='')}/transition"
+        return await self._post_object(path, payload)
+
+    async def complete_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        path = f"/work-items/{quote(work_item_id, safe='')}/complete"
+        return await self._post_object(path, payload)
+
     async def create_evidence_packet(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post_object("/evidence-packets", payload)
 
