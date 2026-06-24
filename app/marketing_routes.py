@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from app.admin_auth import require_orchestrator_admin_token
 from app.clients.agent_bus import AgentBusAPIError, AgentBusClient, MissingAgentBusBaseUrlError
 from app.config import Settings, get_settings
+from app.marketing_governance import MarketingGovernanceValidationError, run_marketing_governance_once
+from app.marketing_governance_contract import MarketingGovernanceRunOnceRequest, MarketingGovernanceRunOnceResponse
 from app.marketing_loop import (
     MockWeeklyMarketingBriefRequest,
     MockWeeklyMarketingBriefResponse,
@@ -69,6 +71,40 @@ async def run_mock_marketing_worker_once(
             workflow_id=payload.workflow_id,
             max_items=payload.max_items,
         )
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentBusAPIError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+@router.post(
+    "/governance/mock/run-once",
+    response_model=MarketingGovernanceRunOnceResponse,
+)
+async def run_mock_marketing_governance_once(
+    payload: MarketingGovernanceRunOnceRequest,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> MarketingGovernanceRunOnceResponse:
+    if not settings.enable_marketing_governance_mock:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_MARKETING_GOVERNANCE_MOCK=true is required before running mock marketing governance.",
+        )
+    client, should_close = _agent_bus_client(request, settings)
+    try:
+        return await run_marketing_governance_once(
+            agent_bus_client=client,
+            workflow_id=payload.workflow_id,
+            run_reviewer=payload.run_reviewer,
+            run_hq_synthesis=payload.run_hq_synthesis,
+        )
+    except MarketingGovernanceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MissingAgentBusBaseUrlError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AgentBusAPIError as exc:
