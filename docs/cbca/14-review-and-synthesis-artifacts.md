@@ -17,10 +17,12 @@ This remains mock-only. It does not connect live Google Ads, HubSpot, GA4, Searc
 
 ## Reviewer Artifact
 
-The mock reviewer step creates two records in Agent Bus:
+The mock reviewer step prefers to create two records in Agent Bus:
 
 1. A canonical Agent Bus review packet through `POST /review-packets`, then attaches it through `POST /work-items/{work_item_id}/review`.
 2. A rich governance evidence artifact through `POST /evidence-packets`, then attaches it through `POST /work-items/{work_item_id}/evidence`.
+
+If the deployed Agent Bus build does not have the review lifecycle route fully available, the mock run keeps going and uses the rich `risk_review` evidence artifact as the summary source of truth.
 
 The canonical review packet is lifecycle-shaped:
 
