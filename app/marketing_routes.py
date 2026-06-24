@@ -126,12 +126,13 @@ async def marketing_workflow_summary(
 ) -> MarketingWorkflowSummary:
     client, should_close = _agent_bus_client(request, settings)
     try:
-        return await build_marketing_workflow_summary(
+        summary = await build_marketing_workflow_summary(
             workflow_id,
             agent_bus_client=client,
             agent_bus_mission_control_url=_mission_control_url(settings),
             orchestrator_snapshot_url=_orchestrator_snapshot_url(settings),
         )
+        return _with_governance_next_action(summary)
     except MarketingWorkflowNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketing workflow not found") from exc
     except MissingAgentBusBaseUrlError as exc:
@@ -169,6 +170,14 @@ def _agent_bus_client(request: Request, settings: Settings) -> tuple[AgentBusCli
         ),
         True,
     )
+
+
+def _with_governance_next_action(summary: MarketingWorkflowSummary) -> MarketingWorkflowSummary:
+    if "specialist_evidence" in summary.missing:
+        summary.next_action = "Run the specialist worker before governance."
+    elif "hq_synthesis_packet" in summary.missing and "review_packet" not in summary.missing:
+        summary.next_action = "Run HQ synthesis."
+    return summary
 
 
 def _mission_control_url(settings: Settings) -> str:
