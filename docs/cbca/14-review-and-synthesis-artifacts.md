@@ -15,6 +15,14 @@ specialist evidence
 
 This remains mock-only. It does not connect live Google Ads, HubSpot, GA4, Search Console, Slack, Monday, Drive, OpenAI, ChatGPT agents, or real worker execution.
 
+## Relationship To The Worker Adapter
+
+The Marketing Worker Adapter owns specialist mock evidence execution only.
+
+It does not create reviewer or HQ synthesis artifacts yet. When the mock workflow is created with `auto_complete_specialists=false`, the worker can attach specialist evidence and the summary will show review/HQ as pending.
+
+The existing mock-run default path still creates reviewer and HQ artifacts for the full governance proof.
+
 ## Reviewer Artifact
 
 The mock reviewer step prefers to create two records in Agent Bus:
@@ -136,6 +144,8 @@ When human approval is ready, `missing=[]` and `next_action` is:
 Hall can review the mock HQ synthesis memo. No production action is allowed from mock evidence.
 ```
 
+When only specialist worker evidence exists, review and synthesis remain incomplete and the next action points back to the reviewer/HQ stage.
+
 ## Mock-Only Safeguards
 
 Every governance artifact includes explicit safeguards:
@@ -157,7 +167,7 @@ These safeguards exist so the MVP can prove the governance chain without creatin
 
 Before real agent execution is allowed, the system still needs:
 
-- a Marketing Agent Worker Adapter contract
+- a reviewer/HQ stage runner contract after specialist worker evidence exists
 - durable human approval action and audit trail
 - source-by-source live integration gates
 - production-safe permission boundaries for each marketing platform
