@@ -4,10 +4,10 @@
 
 | Item | Repo | Status |
 |---|---|---|
-| Convert audit into repo-native CBCA docs | `riseos-agent-orchestrator` | Planned in docs branch |
-| Define Marketing Agent Loop MVP PR | `riseos-agent-orchestrator` | Planned in `12-mvp-marketing-loop-pr-plan.md` |
+| Convert audit into repo-native CBCA docs | `riseos-agent-orchestrator` | Implemented |
+| Define Marketing Agent Loop MVP PR | `riseos-agent-orchestrator` | Implemented in `12-mvp-marketing-loop-pr-plan.md` |
 | Confirm Vultr service names and ports | Ops | Open |
-| Confirm Agent Bus evidence packet endpoint availability | `jarvis-agent-bus-mcp` | Open |
+| Confirm Agent Bus evidence packet endpoint availability | `jarvis-agent-bus-mcp` | Evidence route used by mock loop |
 
 ## Priority 1: Mock Marketing Loop MVP
 
@@ -15,11 +15,24 @@
 |---|---|---|
 | Add marketing workflow request/response models | `riseos-agent-orchestrator` | Pydantic models, no live integrations |
 | Add admin-protected mock-run endpoint | `riseos-agent-orchestrator` | `POST /api/v1/marketing/weekly-command-brief/mock-run` |
-| Extend Agent Bus client methods | `riseos-agent-orchestrator` | Register agents, transition work items, optionally create/attach evidence |
+| Extend Agent Bus client methods | `riseos-agent-orchestrator` | Register agents, create work, attach evidence/review artifacts |
 | Add marketing agent registry seed helper | `riseos-agent-orchestrator` | Idempotent registration of six MVP agents |
 | Add mock evidence generator | `riseos-agent-orchestrator` | Deterministic packet content |
+| Add canonical mock review and HQ synthesis artifacts | `riseos-agent-orchestrator` | `risk_review` and `synthesis_memo` artifacts |
 | Add tests for endpoint and payloads | `riseos-agent-orchestrator` | Use mocked Agent Bus client |
 | Add local curl validation docs | `riseos-agent-orchestrator` | Include endpoint and snapshot checks |
+
+## Priority 1A: Marketing Worker Adapter Contract
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add marketing worker registry | `riseos-agent-orchestrator` | Routing/validation only, live integrations disabled |
+| Add worker adapter contract models | `riseos-agent-orchestrator` | Run-once request/response and per-item result |
+| Add callable mock worker adapter | `riseos-agent-orchestrator` | Poll, claim, mark in progress, attach evidence, complete |
+| Add admin-protected run-once endpoint | `riseos-agent-orchestrator` | `POST /api/v1/marketing/workers/mock/run-once` |
+| Add safe execution flag | `riseos-agent-orchestrator` | `ENABLE_MARKETING_WORKER_MOCK=true` required |
+| Add deferred specialist completion option | `riseos-agent-orchestrator` | `auto_complete_specialists=false` lets worker attach evidence |
+| Add worker adapter tests | `riseos-agent-orchestrator` | Registry, eligibility, safety flags, endpoint auth |
 
 ## Priority 2: Agent Bus Evidence API Hardening
 
