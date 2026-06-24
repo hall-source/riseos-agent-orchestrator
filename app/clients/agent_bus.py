@@ -24,7 +24,7 @@ class AgentBusAPIError(AgentBusClientError):
 
 
 class AgentBusClient:
-    """Small Agent Bus API wrapper for documented WorkItem operations."""
+    """Small Agent Bus API wrapper for documented Agent Bus operations."""
 
     def __init__(
         self,
@@ -44,20 +44,39 @@ class AgentBusClient:
         if self._owns_client and self._http_client is not None:
             await self._http_client.aclose()
 
+    async def register_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post_object("/agents", payload)
+
+    async def heartbeat_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post_object("/agents/heartbeat", payload)
+
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post_object("/work-items", payload)
+
+    async def get_work_item(self, work_item_id: str) -> dict[str, Any]:
+        path = f"/work-items/{quote(work_item_id, safe='')}"
+        return await self._get_object(path)
+
+    async def create_evidence_packet(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post_object("/evidence-packets", payload)
+
+    async def attach_evidence_to_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        path = f"/work-items/{quote(work_item_id, safe='')}/evidence"
+        return await self._post_object(path, payload)
+
+    async def _post_object(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self._base_url:
             raise MissingAgentBusBaseUrlError("AGENT_BUS_BASE_URL is required for Agent Bus dispatch.")
         response = await self._client.post(
-            f"{self._base_url}/work-items",
+            f"{self._base_url}{path}",
             headers=self._headers(),
             json=payload,
         )
-        return _object_response(response, "POST", "/work-items")
+        return _object_response(response, "POST", path)
 
-    async def get_work_item(self, work_item_id: str) -> dict[str, Any]:
+    async def _get_object(self, path: str) -> dict[str, Any]:
         if not self._base_url:
             raise MissingAgentBusBaseUrlError("AGENT_BUS_BASE_URL is required for Agent Bus dispatch.")
-        path = f"/work-items/{quote(work_item_id, safe='')}"
         response = await self._client.get(
             f"{self._base_url}{path}",
             headers=self._headers(),
