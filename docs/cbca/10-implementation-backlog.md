@@ -45,6 +45,17 @@
 | Update summary next actions | `riseos-agent-orchestrator` | Worker first, then reviewer/HQ, then Hall review |
 | Add governance runner tests | `riseos-agent-orchestrator` | Auth, flag, evidence validation, artifact references, mock safeguards |
 
+## Priority 1C: Mock Human Approval
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add approval request/response models | `riseos-agent-orchestrator` | Supports `approve_mock`, `reject_mock`, and `request_changes` |
+| Add durable approval recorder | `riseos-agent-orchestrator` | Attaches `human_approval` evidence to the HQ synthesis work item |
+| Add admin-protected approval endpoints | `riseos-agent-orchestrator` | `POST` and `GET /api/v1/marketing/workflows/{workflow_id}/approval` |
+| Add safe execution flag | `riseos-agent-orchestrator` | `ENABLE_MARKETING_APPROVAL_MOCK=true` required for POST |
+| Update summary approval state | `riseos-agent-orchestrator` | Shows approval decision and no-production-write status |
+| Add approval tests | `riseos-agent-orchestrator` | Auth, flag, missing prerequisites, decisions, summary, safeguards |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
@@ -71,8 +82,8 @@ Do not start this until Hall explicitly approves live read-only integration work
 
 | Item | Notes |
 |---|---|
-| Approval packet schema | Standardize final Hall approval request |
-| Approval state transitions | Add safe states before live writes |
+| Approval packet schema | Implemented for mock approvals; real-data approval remains separate |
+| Approval state transitions | Mock approval states added before live writes |
 | Mission Control marketing filter | Show marketing runs clearly |
 | Reviewer queue view | Show `hall-marketing-reviewer` queue and evidence |
 
