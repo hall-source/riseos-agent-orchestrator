@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -148,12 +149,11 @@ def test_worker_registry_contains_required_marketing_agents() -> None:
         assert entry.live_integrations_enabled is False
 
 
-@pytest.mark.asyncio
-async def test_worker_can_process_one_eligible_mock_specialist_item() -> None:
+def test_worker_can_process_one_eligible_mock_specialist_item() -> None:
     item = marketing_work_item(agent_id="hall-ppc-intelligence")
     fake = FakeMarketingWorkerAgentBusClient([item])
 
-    response = await run_marketing_worker_once(agent_bus_client=fake, workflow_id="marketing-wf-test", max_items=1)
+    response = asyncio.run(run_marketing_worker_once(agent_bus_client=fake, workflow_id="marketing-wf-test", max_items=1))
 
     assert response.processed == 1
     result = response.results[0]
@@ -170,58 +170,53 @@ async def test_worker_can_process_one_eligible_mock_specialist_item() -> None:
     assert fake.completed[0][0] == item["work_item_id"]
 
 
-@pytest.mark.asyncio
-async def test_worker_refuses_unknown_agent() -> None:
+def test_worker_refuses_unknown_agent() -> None:
     item = marketing_work_item(agent_id="unknown-marketing-agent")
     fake = FakeMarketingWorkerAgentBusClient([item])
 
     with pytest.raises(MarketingWorkerValidationError):
-        await process_marketing_specialist_work_item(item, agent_bus_client=fake)
+        asyncio.run(process_marketing_specialist_work_item(item, agent_bus_client=fake))
 
 
-@pytest.mark.asyncio
-async def test_worker_refuses_unsupported_evidence_type() -> None:
+def test_worker_refuses_unsupported_evidence_type() -> None:
     item = marketing_work_item(agent_id="hall-ppc-intelligence")
     fake = FakeMarketingWorkerAgentBusClient([item])
     original = MOCK_EVIDENCE_BY_AGENT["hall-ppc-intelligence"]
     MOCK_EVIDENCE_BY_AGENT["hall-ppc-intelligence"] = {**original, "evidence_type": "unsupported_snapshot"}
     try:
         with pytest.raises(MarketingWorkerValidationError):
-            await process_marketing_specialist_work_item(item, agent_bus_client=fake)
+            asyncio.run(process_marketing_specialist_work_item(item, agent_bus_client=fake))
     finally:
         MOCK_EVIDENCE_BY_AGENT["hall-ppc-intelligence"] = original
 
 
-@pytest.mark.asyncio
-async def test_worker_does_not_process_non_marketing_work() -> None:
+def test_worker_does_not_process_non_marketing_work() -> None:
     item = marketing_work_item(domain="engineering")
     fake = FakeMarketingWorkerAgentBusClient([item])
 
-    response = await run_marketing_worker_once(agent_bus_client=fake, max_items=4)
+    response = asyncio.run(run_marketing_worker_once(agent_bus_client=fake, max_items=4))
 
     assert response.processed == 0
     assert response.results == []
     assert fake.evidence_packets == []
 
 
-@pytest.mark.asyncio
-async def test_worker_does_not_process_live_mode_work_when_live_integrations_are_disabled() -> None:
+def test_worker_does_not_process_live_mode_work_when_live_integrations_are_disabled() -> None:
     item = marketing_work_item(mock_mode=False, live_platform_access=True)
     fake = FakeMarketingWorkerAgentBusClient([item])
 
-    response = await run_marketing_worker_once(agent_bus_client=fake, max_items=4)
+    response = asyncio.run(run_marketing_worker_once(agent_bus_client=fake, max_items=4))
 
     assert response.processed == 0
     assert response.results == []
     assert fake.evidence_packets == []
 
 
-@pytest.mark.asyncio
-async def test_worker_attaches_mock_only_evidence_with_no_live_platform_access() -> None:
+def test_worker_attaches_mock_only_evidence_with_no_live_platform_access() -> None:
     item = marketing_work_item(agent_id="hall-seo-intelligence")
     fake = FakeMarketingWorkerAgentBusClient([item])
 
-    response = await run_marketing_worker_once(agent_bus_client=fake, max_items=1)
+    response = asyncio.run(run_marketing_worker_once(agent_bus_client=fake, max_items=1))
 
     assert response.processed == 1
     packet = fake.evidence_packets[0]
@@ -278,4 +273,3 @@ def test_run_once_endpoint_processes_when_enabled() -> None:
     assert data["results"][0]["status"] == "completed"
     assert data["results"][0]["mock_mode"] is True
     assert data["results"][0]["live_platform_access"] is False
-}
