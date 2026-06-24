@@ -15,6 +15,8 @@ from app.marketing_summary import (
     MarketingWorkflowSummary,
     build_marketing_workflow_summary,
 )
+from app.marketing_worker import run_marketing_worker_once
+from app.marketing_worker_contract import MarketingWorkerRunOnceRequest, MarketingWorkerRunOnceResponse
 
 router = APIRouter(prefix="/api/v1/marketing", tags=["marketing"])
 
@@ -35,6 +37,37 @@ async def mock_weekly_marketing_command_brief(
             payload,
             agent_bus_client=client,
             mission_control_url=_mission_control_url(settings),
+        )
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentBusAPIError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+@router.post(
+    "/workers/mock/run-once",
+    response_model=MarketingWorkerRunOnceResponse,
+)
+async def run_mock_marketing_worker_once(
+    payload: MarketingWorkerRunOnceRequest,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> MarketingWorkerRunOnceResponse:
+    if not settings.enable_marketing_worker_mock:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_MARKETING_WORKER_MOCK=true is required before running the mock marketing worker.",
+        )
+    client, should_close = _agent_bus_client(request, settings)
+    try:
+        return await run_marketing_worker_once(
+            agent_bus_client=client,
+            workflow_id=payload.workflow_id,
+            max_items=payload.max_items,
         )
     except MissingAgentBusBaseUrlError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

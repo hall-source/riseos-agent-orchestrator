@@ -191,6 +191,7 @@ class MockWeeklyMarketingBriefRequest(BaseModel):
     business_unit: str = "RISE Commercial District"
     requested_by: str = "Hall"
     date_range_label: str = "mock_last_7_days"
+    auto_complete_specialists: bool = True
 
 
 class MockWeeklyMarketingBriefResponse(BaseModel):
@@ -201,8 +202,8 @@ class MockWeeklyMarketingBriefResponse(BaseModel):
     review_item_id: str
     synthesis_item_id: str
     review_packet_id: str | None = None
-    review_artifact_id: str
-    synthesis_artifact_id: str
+    review_artifact_id: str | None = None
+    synthesis_artifact_id: str | None = None
     mission_control_url: str
     status: str = "mock_loop_created"
 
@@ -230,6 +231,7 @@ class MockMarketingLoopContext:
             "requested_by": self.requested_by,
             "date_range_label": self.date_range_label,
             "workflow_id": self.workflow_id,
+            "mock_mode": True,
             "mvp_mode": "mock_only",
             "live_platform_access": False,
         }
@@ -256,34 +258,39 @@ async def create_mock_weekly_marketing_command_brief(
         work_item = await agent_bus_client.create_work_item(_specialist_work_item_payload(agent_id, context))
         work_item_id = _response_id(work_item, "work_item_id")
         specialist_item_ids[agent_id] = work_item_id
-        evidence = await agent_bus_client.create_evidence_packet(_evidence_packet_payload(agent_id, work_item_id, context))
-        evidence_id = _response_id(evidence, "evidence_id")
-        created_evidence_packets.append(evidence_id)
-        await agent_bus_client.attach_evidence_to_work_item(
-            work_item_id,
-            {"evidence_id": evidence_id, "actor": "riseos-agent-orchestrator"},
-        )
+        if request.auto_complete_specialists:
+            evidence = await agent_bus_client.create_evidence_packet(_evidence_packet_payload(agent_id, work_item_id, context))
+            evidence_id = _response_id(evidence, "evidence_id")
+            created_evidence_packets.append(evidence_id)
+            await agent_bus_client.attach_evidence_to_work_item(
+                work_item_id,
+                {"evidence_id": evidence_id, "actor": "riseos-agent-orchestrator"},
+            )
 
     review_item = await agent_bus_client.create_work_item(_review_work_item_payload(specialist_item_ids, context))
     review_item_id = _response_id(review_item, "work_item_id")
-    review_packet_id = await _create_and_attach_review_packet(agent_bus_client, review_item_id)
-    review_artifact = await agent_bus_client.create_evidence_packet(_risk_review_artifact_payload(review_item_id, specialist_item_ids, review_packet_id, context))
-    review_artifact_id = _response_id(review_artifact, "evidence_id")
-    created_evidence_packets.append(review_artifact_id)
-    await agent_bus_client.attach_evidence_to_work_item(
-        review_item_id,
-        {"evidence_id": review_artifact_id, "actor": "riseos-agent-orchestrator"},
-    )
-
     synthesis_item = await agent_bus_client.create_work_item(_synthesis_work_item_payload(specialist_item_ids, review_item_id, context))
     synthesis_item_id = _response_id(synthesis_item, "work_item_id")
-    synthesis_artifact = await agent_bus_client.create_evidence_packet(_synthesis_memo_artifact_payload(synthesis_item_id, specialist_item_ids, review_item_id, review_artifact_id, context))
-    synthesis_artifact_id = _response_id(synthesis_artifact, "evidence_id")
-    created_evidence_packets.append(synthesis_artifact_id)
-    await agent_bus_client.attach_evidence_to_work_item(
-        synthesis_item_id,
-        {"evidence_id": synthesis_artifact_id, "actor": "riseos-agent-orchestrator"},
-    )
+
+    review_packet_id: str | None = None
+    review_artifact_id: str | None = None
+    synthesis_artifact_id: str | None = None
+    if request.auto_complete_specialists:
+        review_packet_id = await _create_and_attach_review_packet(agent_bus_client, review_item_id)
+        review_artifact = await agent_bus_client.create_evidence_packet(_risk_review_artifact_payload(review_item_id, specialist_item_ids, review_packet_id, context))
+        review_artifact_id = _response_id(review_artifact, "evidence_id")
+        created_evidence_packets.append(review_artifact_id)
+        await agent_bus_client.attach_evidence_to_work_item(
+            review_item_id,
+            {"evidence_id": review_artifact_id, "actor": "riseos-agent-orchestrator"},
+        )
+        synthesis_artifact = await agent_bus_client.create_evidence_packet(_synthesis_memo_artifact_payload(synthesis_item_id, specialist_item_ids, review_item_id, review_artifact_id, context))
+        synthesis_artifact_id = _response_id(synthesis_artifact, "evidence_id")
+        created_evidence_packets.append(synthesis_artifact_id)
+        await agent_bus_client.attach_evidence_to_work_item(
+            synthesis_item_id,
+            {"evidence_id": synthesis_artifact_id, "actor": "riseos-agent-orchestrator"},
+        )
 
     return MockWeeklyMarketingBriefResponse(
         workflow_id=context.workflow_id,
@@ -343,6 +350,7 @@ def _specialist_work_item_payload(agent_id: str, context: MockMarketingLoopConte
         "metadata": {
             **context.metadata,
             "work_item_role": "specialist_evidence",
+            "worker_role": "specialist",
             "specialist_agent": agent_id,
             "mock_evidence_summary": evidence["summary"],
         },
@@ -396,6 +404,8 @@ def _evidence_packet_payload(agent_id: str, work_item_id: str, context: MockMark
         "test_commands": ["mock-marketing-loop"],
         "test_results": {
             "mode": "mock_only",
+            "mock_mode": True,
+            "not_for_real_marketing_decisions": True,
             "source_systems": evidence["sources_checked"],
             "live_platform_access": False,
             "evidence_schema": "marketing.mock_evidence.v1",
@@ -404,7 +414,7 @@ def _evidence_packet_payload(agent_id: str, work_item_id: str, context: MockMark
         },
         "verification_summary": evidence["summary"],
         "assumptions": ["No live marketing platform data was used."],
-        "unverified_items": ["Live marketing source data is intentionally not connected in this MVP."],
+        "unverified_items": ["Mock evidence is not for real marketing decisions."],
     }
 
 
