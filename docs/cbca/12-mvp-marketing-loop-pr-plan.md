@@ -20,7 +20,7 @@ manual mock request
 -> Agent Bus Mission Control snapshot can show resulting agents, work items, and evidence references
 ```
 
-The worker-plus-governance validation path now separates execution stages:
+The worker-plus-governance-plus-approval validation path separates execution stages:
 
 ```text
 manual mock request with auto_complete_specialists=false
@@ -31,6 +31,8 @@ manual mock request with auto_complete_specialists=false
 -> Governance Stage Runner creates hall-marketing-reviewer risk_review
 -> Governance Stage Runner creates clone-banks-hq synthesis_memo
 -> summary shows human approval ready
+-> Hall or Marcus records approve/reject/request-changes
+-> summary shows the durable mock approval decision
 ```
 
 The read-only Marketing Mission Control summary view is also implemented:
@@ -39,7 +41,7 @@ The read-only Marketing Mission Control summary view is also implemented:
 GET /api/v1/marketing/workflows/{workflow_id}/summary
 ```
 
-It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run, then displays specialist evidence, reviewer artifacts, and HQ synthesis artifacts when they exist.
+It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run, then displays specialist evidence, reviewer artifacts, HQ synthesis artifacts, and mock human approval artifacts when they exist.
 
 ## Mock Run Endpoint
 
@@ -67,7 +69,7 @@ The request supports:
 }
 ```
 
-Default `true` preserves the PR #2 through PR #4 behavior. Set it to `false` when validating the Marketing Worker Adapter and Governance Stage Runner contracts.
+Default `true` preserves the PR #2 through PR #4 behavior. Set it to `false` when validating the Marketing Worker Adapter, Governance Stage Runner, and Mock Human Approval contracts.
 
 ## Worker Run-Once Endpoint
 
@@ -102,6 +104,37 @@ It validates worker-produced specialist evidence, then creates or reuses governa
 
 The governance runner refuses to run if specialist work items or specialist evidence packets are missing.
 
+## Mock Approval Endpoints
+
+```http
+POST /api/v1/marketing/workflows/{workflow_id}/approval
+GET /api/v1/marketing/workflows/{workflow_id}/approval
+```
+
+The POST endpoint is admin-protected and disabled unless:
+
+```bash
+ENABLE_MARKETING_APPROVAL_MOCK=true
+```
+
+It accepts:
+
+```text
+approve_mock
+reject_mock
+request_changes
+```
+
+and stores the mapped mock-only state in a `human_approval` evidence artifact:
+
+```text
+approved_mock_only
+rejected_mock_only
+changes_requested_mock_only
+```
+
+The GET endpoint returns `not_approved` when no approval artifact exists.
+
 ## Summary Endpoint
 
 ```http
@@ -117,10 +150,11 @@ The summary endpoint:
 - filters work items where `metadata.workflow_id` matches the requested workflow
 - fetches attached evidence packets from `metadata.evidence_packet_ids`
 - groups specialists, reviewer, and Clone Banks HQ synthesis items
-- reads `risk_review` and `synthesis_memo` artifact contents from actual attached evidence packets
-- computes readiness flags, missing packets, workflow status, and a plain-English next action
+- reads `risk_review`, `synthesis_memo`, and `human_approval` artifact contents from actual attached evidence packets
+- computes readiness flags, missing packets, workflow status, human approval state, and a plain-English next action
 - tells callers to run the specialist worker before governance when specialist evidence is missing
 - tells callers to run HQ synthesis when review exists but the HQ memo is missing
+- shows approved/rejected/change-requested decisions without triggering production action
 - returns `404` when no matching workflow work items exist
 - returns a clean degraded error when Agent Bus is unavailable
 
@@ -178,13 +212,13 @@ GET /review-packets/{review_id}
 
 No Agent Bus code change was needed. The orchestrator Agent Bus client prefers the existing review routes for the reviewer lifecycle packet. If a deployed Agent Bus build does not have those routes fully installed, the mock run falls back to the rich `risk_review` evidence artifact and keeps the workflow safe and reviewable.
 
-The richer governance payloads are stored in evidence packets with `artifact_type` / `evidence_type` values of `risk_review` and `synthesis_memo`.
+The richer governance and approval payloads are stored in evidence packets with `artifact_type` / `evidence_type` values of `risk_review`, `synthesis_memo`, and `human_approval`.
 
 ## Live Integration Boundary
 
 This MVP does not connect to live Google Ads, HubSpot, GA4, Search Console, Slack, Monday, Drive, OpenAI, or ChatGPT agents.
 
-All evidence and governance artifacts are mock-only and explicitly marked with:
+All evidence, governance, and approval artifacts are mock-only and explicitly marked with:
 
 ```json
 {
@@ -192,7 +226,8 @@ All evidence and governance artifacts are mock-only and explicitly marked with:
   "confidence": "mock_only",
   "mock_mode": true,
   "live_platform_access": false,
-  "not_for_real_marketing_decisions": true
+  "not_for_real_marketing_decisions": true,
+  "no_production_write_performed": true
 }
 ```
 
@@ -244,6 +279,26 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/governance/mock/run-once
   }' | jq .
 ```
 
+Approve mock synthesis:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/approval \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "approve_mock",
+    "approved_by": "Hall",
+    "notes": "Mock synthesis reviewed. Safe to proceed to the next development step."
+  }' | jq .
+```
+
+Read approval:
+
+```bash
+curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/approval \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq .
+```
+
 Then read the summary:
 
 ```bash
@@ -266,6 +321,7 @@ curl -sS http://127.0.0.1:8055/api/v1/orchestrator/snapshot | jq .
 ## Test Plan
 
 ```bash
+pytest tests/test_marketing_governance.py
 pytest tests/test_marketing_worker.py
 pytest tests/test_marketing_loop.py
 pytest
@@ -286,6 +342,11 @@ Focused tests use fake Agent Bus clients and verify:
 - governance refuses missing specialist evidence
 - `risk_review` references specialist evidence packet IDs
 - `synthesis_memo` references specialist evidence and the review artifact
+- approval POST requires admin auth and `ENABLE_MARKETING_APPROVAL_MOCK`
+- approval refuses missing governance artifacts
+- approval accepts approve, reject, and request-changes decisions
+- approval creates a `human_approval` artifact with no-production-write safeguards
+- summary includes approval state
 - existing mock-loop default behavior remains backward compatible
 
 ## Known Limitations
@@ -293,13 +354,13 @@ Focused tests use fake Agent Bus clients and verify:
 - This is a mock orchestration proof only; it does not execute specialist agents.
 - The worker adapter and governance runner run only when called directly or through run-once endpoints; neither is a daemon.
 - Reviewer and HQ synthesis artifacts are generated by deterministic mock logic, not live agents.
+- Human approval records only mock decisions and does not authorize production work.
 - The Agent Bus review packet model stores lifecycle review fields; the richer marketing governance review content is attached as a `risk_review` evidence artifact.
 - If the deployed Agent Bus review lifecycle route is unavailable, the canonical review packet id is omitted and the `risk_review` artifact remains the summary source of truth.
-- Human approval readiness is visible in the summary, but durable human approval action is not yet implemented.
 - Mission Control visibility depends on Agent Bus persistence and snapshot support.
 - Orchestrator snapshot remains focused on orchestrator review/workflow state; Agent Bus Mission Control is the canonical view for Agent Bus work items and evidence.
 - Repeated mock runs intentionally create additional mock records for MVP visibility.
 
 ## Recommended Next PR
 
-Add a durable human approval action for mock HQ synthesis memos, with explicit audit metadata and no production writes.
+Add the first read-only real data-source evidence adapter behind a strict safe flag, starting with one source and no write capability.

@@ -18,6 +18,7 @@ COMPLETE_STATUSES = {"approved", "completed"}
 ACTIVE_STATUSES = {"claimed", "in_progress", "awaiting_evidence", "ready_for_review", "review_in_progress"}
 REVIEW_ARTIFACT_TYPE = "risk_review"
 SYNTHESIS_ARTIFACT_TYPE = "synthesis_memo"
+HUMAN_APPROVAL_ARTIFACT_TYPE = "human_approval"
 
 
 class MarketingSummaryAgent(BaseModel):
@@ -53,11 +54,23 @@ class MarketingSynthesisSummary(BaseModel):
     ready: bool = False
 
 
+class MarketingHumanApprovalSummary(BaseModel):
+    state: str = "not_approved"
+    artifact_id: str | None = None
+    approved_by: str | None = None
+    decision: str | None = None
+    notes: str | None = None
+    no_production_write_performed: bool = True
+    no_external_platform_action_performed: bool = True
+    created_at: str | None = None
+
+
 class MarketingReadinessSummary(BaseModel):
     specialist_evidence_complete: bool = False
     review_complete: bool = False
     synthesis_complete: bool = False
     human_approval_ready: bool = False
+    human_approval_complete: bool = False
 
 
 class MarketingWorkflowSummaryLinks(BaseModel):
@@ -83,6 +96,7 @@ class MarketingWorkflowSummary(BaseModel):
     evidence_packets: list[dict[str, Any]] = Field(default_factory=list)
     review: MarketingReviewSummary
     synthesis: MarketingSynthesisSummary
+    human_approval: MarketingHumanApprovalSummary = Field(default_factory=MarketingHumanApprovalSummary)
     readiness: MarketingReadinessSummary
     missing: list[str] = Field(default_factory=list)
     next_action: str
@@ -120,8 +134,10 @@ async def build_marketing_workflow_summary(
     synthesis_item = _item_for_agent(work_items, SYNTHESIS_AGENT, role="hq_synthesis")
     review_artifact = _artifact_packet_for_item(review_item, evidence_by_work_item, REVIEW_ARTIFACT_TYPE)
     synthesis_artifact = _artifact_packet_for_item(synthesis_item, evidence_by_work_item, SYNTHESIS_ARTIFACT_TYPE)
+    approval_artifact = _artifact_packet_for_item(synthesis_item, evidence_by_work_item, HUMAN_APPROVAL_ARTIFACT_TYPE)
     review_content = _artifact_content(review_artifact)
     synthesis_content = _artifact_content(synthesis_artifact)
+    approval_content = _artifact_content(approval_artifact)
     representative_metadata = _representative_metadata(work_items)
 
     agents = [
@@ -137,22 +153,28 @@ async def build_marketing_workflow_summary(
     )
     review_complete = review_artifact is not None or _review_metadata_complete(review_item)
     synthesis_complete = synthesis_artifact is not None or _synthesis_metadata_complete(synthesis_item)
-    human_approved = _human_approved(work_items)
     approval_required = bool(representative_metadata.get("approval_required", True))
+    human_approval_complete = approval_artifact is not None
+    human_approval_ready = bool(approval_required and specialist_evidence_complete and review_complete and synthesis_complete)
     readiness = MarketingReadinessSummary(
         specialist_evidence_complete=specialist_evidence_complete,
         review_complete=review_complete,
         synthesis_complete=synthesis_complete,
-        human_approval_ready=bool(
-            approval_required
-            and specialist_evidence_complete
-            and review_complete
-            and synthesis_complete
-            and not human_approved
-        ),
+        human_approval_ready=human_approval_ready,
+        human_approval_complete=human_approval_complete,
     )
-    missing = _missing_items(readiness, approval_required=approval_required, human_approved=human_approved)
-    status = _workflow_status(work_items, readiness, approval_required=approval_required, human_approved=human_approved)
+    missing = _missing_items(readiness, approval_required=approval_required)
+    status = _workflow_status(work_items, readiness, approval_content)
+    human_approval = MarketingHumanApprovalSummary(
+        state=_approval_state(approval_content),
+        artifact_id=_artifact_id(approval_artifact),
+        approved_by=_string_or_none(approval_content.get("approved_by")),
+        decision=_string_or_none(approval_content.get("decision")),
+        notes=_string_or_none(approval_content.get("notes")),
+        no_production_write_performed=bool(approval_content.get("no_production_write_performed", True)),
+        no_external_platform_action_performed=bool(approval_content.get("no_external_platform_action_performed", True)),
+        created_at=_string_or_none(approval_content.get("created_at")),
+    )
 
     return MarketingWorkflowSummary(
         workflow_id=workflow_id,
@@ -192,9 +214,10 @@ async def build_marketing_workflow_summary(
             summary=_string_or_none(synthesis_content.get("summary")),
             ready=synthesis_complete,
         ),
+        human_approval=human_approval,
         readiness=readiness,
         missing=missing,
-        next_action=_next_action(status, missing, readiness),
+        next_action=_next_action(status, missing, readiness, human_approval),
         links=MarketingWorkflowSummaryLinks(
             agent_bus_mission_control=agent_bus_mission_control_url,
             orchestrator_snapshot=orchestrator_snapshot_url,
@@ -252,17 +275,18 @@ def _agent_status(role: str, item: dict[str, Any] | None, evidence_type_count: i
 def _workflow_status(
     work_items: list[dict[str, Any]],
     readiness: MarketingReadinessSummary,
-    *,
-    approval_required: bool,
-    human_approved: bool,
+    approval_content: dict[str, Any],
 ) -> str:
     statuses = {_item_status(item) for item in work_items}
     if statuses & BLOCKED_STATUSES:
         return "blocked"
-    if approval_required and human_approved:
+    approval_state = _approval_state(approval_content)
+    if approval_state == "approved_mock_only":
         return "completed"
-    if not approval_required and readiness.review_complete and readiness.synthesis_complete:
-        return "completed"
+    if approval_state == "rejected_mock_only":
+        return "rejected"
+    if approval_state == "changes_requested_mock_only":
+        return "changes_requested"
     if readiness.human_approval_ready:
         return "awaiting_human_approval"
     if readiness.specialist_evidence_complete:
@@ -276,7 +300,6 @@ def _missing_items(
     readiness: MarketingReadinessSummary,
     *,
     approval_required: bool,
-    human_approved: bool,
 ) -> list[str]:
     missing: list[str] = []
     if not readiness.specialist_evidence_complete:
@@ -285,12 +308,23 @@ def _missing_items(
         missing.append("review_packet")
     if not readiness.synthesis_complete:
         missing.append("hq_synthesis_packet")
-    if approval_required and not human_approved and not readiness.human_approval_ready:
+    if approval_required and not readiness.human_approval_complete and not readiness.human_approval_ready:
         missing.append("human_approval")
     return missing
 
 
-def _next_action(status: str, missing: list[str], readiness: MarketingReadinessSummary) -> str:
+def _next_action(
+    status: str,
+    missing: list[str],
+    readiness: MarketingReadinessSummary,
+    human_approval: MarketingHumanApprovalSummary,
+) -> str:
+    if human_approval.state == "approved_mock_only":
+        return "Mock workflow approved. No production action was performed. Next development step can begin."
+    if human_approval.state == "rejected_mock_only":
+        return "Mock workflow rejected. Review notes and revise the workflow."
+    if human_approval.state == "changes_requested_mock_only":
+        return "Changes requested. Update the synthesis/governance logic before proceeding."
     if status == "blocked":
         return "Resolve blocked marketing work items."
     if "specialist_evidence" in missing:
@@ -318,14 +352,6 @@ def _synthesis_metadata_complete(item: dict[str, Any] | None) -> bool:
     return _item_status(item) in COMPLETE_STATUSES or bool(
         metadata.get("hq_synthesis_packet_ids") or metadata.get("synthesis_packet_ids")
     )
-
-
-def _human_approved(work_items: list[dict[str, Any]]) -> bool:
-    for item in work_items:
-        value = _metadata(item).get("human_approval_status") or _metadata(item).get("human_approval")
-        if str(value).lower() in {"approved", "completed", "true"}:
-            return True
-    return False
 
 
 def _item_for_agent(work_items: list[dict[str, Any]], agent_id: str, *, role: str) -> dict[str, Any] | None:
@@ -427,6 +453,10 @@ def _artifact_status(item: dict[str, Any] | None, packet: dict[str, Any] | None)
     if packet is not None:
         return "completed"
     return _item_status(item)
+
+
+def _approval_state(content: dict[str, Any]) -> str:
+    return str(content.get("approval_state") or "not_approved")
 
 
 def _metadata(item: dict[str, Any]) -> dict[str, Any]:

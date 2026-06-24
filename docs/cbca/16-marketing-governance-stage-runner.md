@@ -123,6 +123,18 @@ The HQ artifact is stored as an evidence packet with:
 
 The memo references both the specialist evidence IDs and the reviewer artifact ID.
 
+## Human Approval Handoff
+
+After governance runs, the summary should show `human_approval_ready=true` and `human_approval_complete=false` until Hall or Marcus records a decision.
+
+The next step is handled by:
+
+```http
+POST /api/v1/marketing/workflows/{workflow_id}/approval
+```
+
+That endpoint records a `human_approval` evidence artifact on the HQ synthesis work item. It does not trigger production action.
+
 ## Summary Readiness
 
 The summary endpoint still reads Agent Bus work items and attached evidence packets as the source of truth.
@@ -132,13 +144,17 @@ Readiness becomes:
 - `specialist_evidence_complete=true` when each specialist work item has evidence
 - `review_complete=true` when the reviewer item has a `risk_review` artifact
 - `synthesis_complete=true` when the HQ item has a `synthesis_memo` artifact
-- `human_approval_ready=true` when all three are complete and Hall has not approved yet
+- `human_approval_ready=true` when all three are complete
+- `human_approval_complete=true` when a `human_approval` artifact exists
 
 Next action guidance now reflects the staged flow:
 
 - missing specialist evidence: `Run the specialist worker before governance.`
 - review complete but HQ missing: `Run HQ synthesis.`
 - review and synthesis complete: Hall can review the mock HQ synthesis memo
+- approved: mock workflow approved; no production action was performed
+- rejected: review notes and revise the workflow
+- changes requested: update the synthesis/governance logic before proceeding
 
 ## Safety Boundaries
 
@@ -160,6 +176,15 @@ Every generated governance artifact repeats the mock safeguards:
   "live_platform_access": false,
   "not_for_real_marketing_decisions": true,
   "human_approval_required": true
+}
+```
+
+The follow-on human approval artifact additionally records:
+
+```json
+{
+  "no_production_write_performed": true,
+  "no_external_platform_action_performed": true
 }
 ```
 
@@ -204,6 +229,19 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/governance/mock/run-once
   }' | jq .
 ```
 
+Record human approval:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/approval \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "approve_mock",
+    "approved_by": "Hall",
+    "notes": "Mock synthesis reviewed. Safe to proceed to the next development step."
+  }' | jq .
+```
+
 Read the summary:
 
 ```bash
@@ -221,7 +259,6 @@ curl -sS http://127.0.0.1:8050/api/v1/mission-control/snapshot | jq .
 
 Before real reviewer, HQ, or specialist execution can run, the system still needs:
 
-- durable human approval action
 - read-only source adapters with per-source safe flags
 - audit logs for every external source read
 - explicit no-write tests for each marketing platform

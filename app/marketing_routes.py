@@ -5,6 +5,12 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from app.admin_auth import require_orchestrator_admin_token
 from app.clients.agent_bus import AgentBusAPIError, AgentBusClient, MissingAgentBusBaseUrlError
 from app.config import Settings, get_settings
+from app.marketing_approval import (
+    MarketingApprovalValidationError,
+    get_marketing_mock_approval,
+    record_marketing_mock_approval,
+)
+from app.marketing_approval_contract import MarketingApprovalRecord, MarketingApprovalRequest
 from app.marketing_governance import MarketingGovernanceValidationError, run_marketing_governance_once
 from app.marketing_governance_contract import MarketingGovernanceRunOnceRequest, MarketingGovernanceRunOnceResponse
 from app.marketing_loop import (
@@ -114,6 +120,67 @@ async def run_mock_marketing_governance_once(
             await client.aclose()
 
 
+@router.post(
+    "/workflows/{workflow_id}/approval",
+    response_model=MarketingApprovalRecord,
+)
+async def record_mock_marketing_approval(
+    workflow_id: str,
+    payload: MarketingApprovalRequest,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> MarketingApprovalRecord:
+    if not settings.enable_marketing_approval_mock:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_MARKETING_APPROVAL_MOCK=true is required before recording mock marketing approval.",
+        )
+    client, should_close = _agent_bus_client(request, settings)
+    try:
+        return await record_marketing_mock_approval(
+            agent_bus_client=client,
+            workflow_id=workflow_id,
+            payload=payload,
+        )
+    except MarketingApprovalValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentBusAPIError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+@router.get(
+    "/workflows/{workflow_id}/approval",
+    response_model=MarketingApprovalRecord,
+)
+async def get_mock_marketing_approval(
+    workflow_id: str,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> MarketingApprovalRecord:
+    client, should_close = _agent_bus_client(request, settings)
+    try:
+        return await get_marketing_mock_approval(
+            agent_bus_client=client,
+            workflow_id=workflow_id,
+        )
+    except MarketingApprovalValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentBusAPIError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
 @router.get(
     "/workflows/{workflow_id}/summary",
     response_model=MarketingWorkflowSummary,
@@ -173,6 +240,8 @@ def _agent_bus_client(request: Request, settings: Settings) -> tuple[AgentBusCli
 
 
 def _with_governance_next_action(summary: MarketingWorkflowSummary) -> MarketingWorkflowSummary:
+    if getattr(summary, "human_approval", None) and summary.human_approval.state != "not_approved":
+        return summary
     if "specialist_evidence" in summary.missing:
         summary.next_action = "Run the specialist worker before governance."
     elif "hq_synthesis_packet" in summary.missing and "review_packet" not in summary.missing:

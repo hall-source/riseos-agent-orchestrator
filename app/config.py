@@ -33,6 +33,7 @@ class Settings:
     enable_agent_bus_dispatch: bool = False
     enable_marketing_worker_mock: bool = False
     enable_marketing_governance_mock: bool = False
+    enable_marketing_approval_mock: bool = False
     agent_bus_base_url: str | None = None
     agent_bus_token: str | None = None
     agent_bus_timeout_seconds: int = 30
@@ -100,6 +101,7 @@ def get_settings() -> Settings:
         enable_agent_bus_dispatch=_bool_env("ENABLE_AGENT_BUS_DISPATCH"),
         enable_marketing_worker_mock=_bool_env("ENABLE_MARKETING_WORKER_MOCK"),
         enable_marketing_governance_mock=_bool_env("ENABLE_MARKETING_GOVERNANCE_MOCK"),
+        enable_marketing_approval_mock=_bool_env("ENABLE_MARKETING_APPROVAL_MOCK"),
         agent_bus_base_url=os.getenv("AGENT_BUS_BASE_URL"),
         agent_bus_token=os.getenv("AGENT_BUS_TOKEN"),
         agent_bus_timeout_seconds=_int_env("AGENT_BUS_TIMEOUT_SECONDS", 30),
