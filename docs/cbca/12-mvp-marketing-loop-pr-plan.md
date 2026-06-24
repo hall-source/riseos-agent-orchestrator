@@ -2,7 +2,7 @@
 
 ## Implementation Status
 
-The first mock-only Clone Banks Marketing Agent Loop is implemented in `riseos-agent-orchestrator`.
+The mock-only Clone Banks Marketing Agent Loop is implemented in `riseos-agent-orchestrator`.
 
 The implemented loop is:
 
@@ -11,19 +11,22 @@ manual mock request
 -> Orchestrator creates a mock marketing workflow id
 -> Orchestrator registers/seeds marketing agents in Agent Bus
 -> Agent Bus receives specialist work items
--> canonical mock evidence packets are created and attached
+-> canonical mock specialist evidence packets are created and attached
 -> Hall marketing reviewer item is created
+-> canonical Agent Bus review packet is created and attached
+-> rich mock risk_review artifact is created and attached
 -> Clone Banks HQ synthesis item is created
+-> rich mock synthesis_memo artifact is created and attached
 -> Agent Bus Mission Control snapshot can show resulting agents, work items, and evidence references
 ```
 
-The follow-up read-only Marketing Mission Control summary view is also implemented:
+The read-only Marketing Mission Control summary view is also implemented:
 
 ```text
 GET /api/v1/marketing/workflows/{workflow_id}/summary
 ```
 
-It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run.
+It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run, then displays the actual reviewer and HQ synthesis artifacts.
 
 ## Mock Run Endpoint
 
@@ -58,6 +61,7 @@ The summary endpoint:
 - filters work items where `metadata.workflow_id` matches the requested workflow
 - fetches attached evidence packets from `metadata.evidence_packet_ids`
 - groups specialists, reviewer, and Clone Banks HQ synthesis items
+- reads `risk_review` and `synthesis_memo` artifact contents from actual attached evidence packets
 - computes readiness flags, missing packets, workflow status, and a plain-English next action
 - returns `404` when no matching workflow work items exist
 - returns a clean degraded error when Agent Bus is unavailable
@@ -92,7 +96,7 @@ hall-creative-strategist
 hall-marketing-reviewer
 ```
 
-## Agent Bus Evidence Route Decision
+## Agent Bus Evidence And Review Route Decision
 
 Agent Bus already exposes canonical evidence lifecycle routes:
 
@@ -103,18 +107,27 @@ GET /evidence-packets/{evidence_id}
 GET /work-items?repository=...
 ```
 
-No Agent Bus code change was needed. The orchestrator Agent Bus client wraps these existing routes for mock evidence creation, attachment, and read-only summary generation.
+Agent Bus also exposes canonical review lifecycle routes:
+
+```text
+POST /review-packets
+POST /work-items/{work_item_id}/review
+GET /review-packets/{review_id}
+```
+
+No Agent Bus code change was needed. The orchestrator Agent Bus client wraps the existing review routes for the reviewer lifecycle packet and keeps the richer governance payloads in evidence packets with `artifact_type` / `evidence_type` values of `risk_review` and `synthesis_memo`.
 
 ## Live Integration Boundary
 
 This MVP does not connect to live Google Ads, HubSpot, GA4, Search Console, Slack, Monday, Drive, OpenAI, or ChatGPT agents.
 
-All evidence is mock-only and explicitly marked with:
+All evidence and governance artifacts are mock-only and explicitly marked with:
 
 ```json
 {
   "mode": "mock_only",
   "confidence": "mock_only",
+  "mock_only": true,
   "live_platform_access": false
 }
 ```
@@ -174,23 +187,29 @@ The focused tests use a fake Agent Bus client and verify:
 - existing `X-Orchestrator-Admin-Token` auth still works
 - all six marketing agents are seeded
 - four specialist work items are created
-- four canonical mock evidence packets are created and attached
+- four canonical mock specialist evidence packets are created and attached
 - reviewer and Clone Banks HQ synthesis items are created
+- one canonical Agent Bus review packet is created and attached
+- `risk_review` and `synthesis_memo` artifacts are created and attached
 - summary returns the expected structure for a mock workflow
+- summary displays reviewer artifact fields from the actual packet
+- summary displays HQ synthesis artifact fields from the actual packet
 - missing workflow returns `404`
 - Agent Bus unavailable returns a clean degraded error
-- readiness flags and next action change as review, synthesis, and human approval are represented
-- no live platform access is represented in metadata
+- readiness flags become true when review and synthesis artifacts exist
+- next action changes to human review once synthesis exists
+- mock-only safeguards remain present
 
 ## Known Limitations
 
 - This is a mock orchestration proof only; it does not execute specialist agents.
-- The reviewer and HQ synthesis items are queued work items, not real agent outputs.
-- The summary endpoint infers review, synthesis, and human approval completion from work-item status and metadata because no real reviewer or HQ output is produced yet.
+- Reviewer and HQ synthesis artifacts are generated by deterministic mock logic, not live agents.
+- The Agent Bus review packet model stores lifecycle review fields; the richer marketing governance review content is attached as a `risk_review` evidence artifact.
+- Human approval readiness is visible in the summary, but durable human approval action is not yet implemented.
 - Mission Control visibility depends on Agent Bus persistence and snapshot support.
 - Orchestrator snapshot remains focused on orchestrator review/workflow state; Agent Bus Mission Control is the canonical view for Agent Bus work items and evidence.
 - Repeated mock runs intentionally create additional mock records for MVP visibility.
 
 ## Recommended Next PR
 
-Add canonical mock review and HQ synthesis packet creation so the summary endpoint can stop relying on inferred metadata for reviewer/HQ completion and can display richer Marketing Mission Control outputs.
+Add the Marketing Agent Worker Adapter contract so real worker execution can eventually replace mock artifact generation while preserving these governance and approval boundaries.
