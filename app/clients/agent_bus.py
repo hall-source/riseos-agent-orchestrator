@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -53,12 +53,20 @@ class AgentBusClient:
     async def create_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post_object("/work-items", payload)
 
+    async def list_work_items(self, *, repository: str | None = None) -> list[dict[str, Any]]:
+        query = f"?{urlencode({'repository': repository})}" if repository else ""
+        return await self._get_list(f"/work-items{query}")
+
     async def get_work_item(self, work_item_id: str) -> dict[str, Any]:
         path = f"/work-items/{quote(work_item_id, safe='')}"
         return await self._get_object(path)
 
     async def create_evidence_packet(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post_object("/evidence-packets", payload)
+
+    async def get_evidence_packet(self, evidence_id: str) -> dict[str, Any]:
+        path = f"/evidence-packets/{quote(evidence_id, safe='')}"
+        return await self._get_object(path)
 
     async def attach_evidence_to_work_item(self, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         path = f"/work-items/{quote(work_item_id, safe='')}/evidence"
@@ -83,6 +91,15 @@ class AgentBusClient:
         )
         return _object_response(response, "GET", path)
 
+    async def _get_list(self, path: str) -> list[dict[str, Any]]:
+        if not self._base_url:
+            raise MissingAgentBusBaseUrlError("AGENT_BUS_BASE_URL is required for Agent Bus dispatch.")
+        response = await self._client.get(
+            f"{self._base_url}{path}",
+            headers=self._headers(),
+        )
+        return _list_response(response, "GET", path)
+
     @property
     def _client(self) -> httpx.AsyncClient:
         if self._http_client is None:
@@ -106,6 +123,18 @@ def _object_response(response: httpx.Response, method: str, path: str) -> dict[s
     if not isinstance(data, dict):
         raise AgentBusAPIError(method, path, response.status_code, "Expected object response.")
     return data
+
+
+def _list_response(response: httpx.Response, method: str, path: str) -> list[dict[str, Any]]:
+    if response.status_code < 200 or response.status_code >= 300:
+        raise AgentBusAPIError(method, path, response.status_code, _response_detail(response))
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise AgentBusAPIError(method, path, response.status_code, "Malformed JSON response.") from exc
+    if not isinstance(data, list):
+        raise AgentBusAPIError(method, path, response.status_code, "Expected list response.")
+    return [item for item in data if isinstance(item, dict)]
 
 
 def _response_detail(response: httpx.Response) -> str:
