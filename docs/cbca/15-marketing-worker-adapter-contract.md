@@ -46,6 +46,7 @@ The adapter does not:
 - write to live marketing platforms
 - approve production actions
 - run as a daemon or background service
+- create reviewer or Clone Banks HQ synthesis artifacts
 
 ## Worker Input Contract
 
@@ -162,6 +163,18 @@ Every evidence packet includes:
 }
 ```
 
+## Governance Handoff
+
+After the worker completes specialist work, the summary should show specialist evidence complete and reviewer/HQ pending.
+
+The next mock stage is handled by:
+
+```http
+POST /api/v1/marketing/governance/mock/run-once
+```
+
+That governance runner validates the worker-produced evidence, creates `risk_review`, creates `synthesis_memo`, and moves the workflow to human approval readiness. Worker evidence alone must not mark the workflow human-approval-ready.
+
 ## Safety Flag
 
 The endpoint is disabled unless this environment variable is set:
@@ -207,6 +220,19 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/workers/mock/run-once \
   -d '{
     "workflow_id":"'$WORKFLOW_ID'",
     "max_items":4
+  }' | jq .
+```
+
+Run governance:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/governance/mock/run-once \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflow_id":"'$WORKFLOW_ID'",
+    "run_reviewer": true,
+    "run_hq_synthesis": true
   }' | jq .
 ```
 
