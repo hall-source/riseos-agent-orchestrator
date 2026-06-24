@@ -15,7 +15,9 @@ class FakeAgentBusClient:
         self.heartbeats: list[dict[str, object]] = []
         self.work_items: list[dict[str, object]] = []
         self.evidence_packets: list[dict[str, object]] = []
+        self.review_packets: list[dict[str, object]] = []
         self.attached_evidence: list[tuple[str, dict[str, object]]] = []
+        self.attached_reviews: list[tuple[str, dict[str, object]]] = []
 
     async def register_agent(self, payload: dict[str, object]) -> dict[str, object]:
         self.registered_agents.append(payload)
@@ -66,6 +68,30 @@ class FakeAgentBusClient:
                 return item
         return {"work_item_id": work_item_id, "metadata": {"evidence_packet_ids": [payload["evidence_id"]]}}
 
+    async def create_review_packet(self, payload: dict[str, object]) -> dict[str, object]:
+        review_id = str(uuid4())
+        packet = {**payload, "review_id": review_id}
+        self.review_packets.append(packet)
+        return packet
+
+    async def get_review_packet(self, review_id: str) -> dict[str, object]:
+        for packet in self.review_packets:
+            if packet.get("review_id") == review_id:
+                return packet
+        raise AgentBusAPIError("GET", f"/review-packets/{review_id}", 404, "Review packet not found")
+
+    async def attach_review_to_work_item(self, work_item_id: str, payload: dict[str, object]) -> dict[str, object]:
+        self.attached_reviews.append((work_item_id, payload))
+        for item in self.work_items:
+            if item.get("work_item_id") == work_item_id:
+                metadata = item.setdefault("metadata", {})
+                if isinstance(metadata, dict):
+                    review_ids = metadata.setdefault("review_packet_ids", [])
+                    if isinstance(review_ids, list):
+                        review_ids.append(payload["review_id"])
+                return item
+        return {"work_item_id": work_item_id, "metadata": {"review_packet_ids": [payload["review_id"]]}}
+
 
 class UnavailableAgentBusClient(FakeAgentBusClient):
     async def list_work_items(self, *, repository: str | None = None) -> list[dict[str, object]]:
@@ -113,20 +139,12 @@ def work_item_for_role(fake: FakeAgentBusClient, role: str) -> dict[str, object]
     raise AssertionError(f"No work item found for role {role}")
 
 
-def mark_review_complete(fake: FakeAgentBusClient) -> None:
-    item = work_item_for_role(fake, "marketing_review")
-    metadata = item.setdefault("metadata", {})
-    assert isinstance(metadata, dict)
-    metadata["review_packet_ids"] = [str(uuid4())]
-    item["status"] = "approved"
-
-
-def mark_synthesis_complete(fake: FakeAgentBusClient) -> None:
-    item = work_item_for_role(fake, "hq_synthesis")
-    metadata = item.setdefault("metadata", {})
-    assert isinstance(metadata, dict)
-    metadata["hq_synthesis_packet_ids"] = [str(uuid4())]
-    item["status"] = "completed"
+def evidence_packet_for_type(fake: FakeAgentBusClient, artifact_type: str) -> dict[str, object]:
+    for packet in fake.evidence_packets:
+        test_results = packet.get("test_results")
+        if isinstance(test_results, dict) and test_results.get("artifact_type") == artifact_type:
+            return packet
+    raise AssertionError(f"No evidence packet found for artifact type {artifact_type}")
 
 
 def mark_human_approved(fake: FakeAgentBusClient) -> None:
@@ -164,15 +182,20 @@ def test_mock_weekly_marketing_command_brief_creates_mock_loop_with_bearer_token
     assert data["mission_control_url"] == "http://127.0.0.1:8050/api/v1/mission-control/snapshot"
     assert len(data["created_agents"]) == 6
     assert len(data["created_work_items"]) == 6
-    assert len(data["created_evidence_packets"]) == 4
+    assert len(data["created_evidence_packets"]) == 6
     assert data["review_item_id"] in data["created_work_items"]
     assert data["synthesis_item_id"] in data["created_work_items"]
+    assert data["review_artifact_id"] in data["created_evidence_packets"]
+    assert data["synthesis_artifact_id"] in data["created_evidence_packets"]
+    assert data["review_packet_id"]
 
     assert len(fake.registered_agents) == 6
     assert len(fake.heartbeats) == 6
     assert len(fake.work_items) == 6
-    assert len(fake.evidence_packets) == 4
-    assert len(fake.attached_evidence) == 4
+    assert len(fake.evidence_packets) == 6
+    assert len(fake.review_packets) == 1
+    assert len(fake.attached_evidence) == 6
+    assert len(fake.attached_reviews) == 1
     assert {item["owner_agent"] for item in fake.work_items[:4]} == {
         "hall-data-intelligence",
         "hall-ppc-intelligence",
@@ -195,6 +218,50 @@ def test_mock_weekly_marketing_command_brief_creates_mock_loop_with_bearer_token
     assert evidence["mode"] == "mock_only"
     assert evidence["confidence"] == "mock_only"
     assert evidence["live_platform_access"] is False
+
+
+def test_mock_run_creates_reviewer_artifact() -> None:
+    client, fake = client_with_fake_agent_bus()
+
+    response = client.post(
+        "/api/v1/marketing/weekly-command-brief/mock-run",
+        headers={"Authorization": "Bearer admin-token"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    review_item = work_item_for_role(fake, "marketing_review")
+    review_packet = fake.review_packets[0]
+    review_artifact = evidence_packet_for_type(fake, "risk_review")
+    review_results = review_artifact["test_results"]
+    assert review_packet["reviewer"] == "hall-marketing-reviewer"
+    assert review_packet["review_status"] == "approved"
+    assert review_packet["risk_level"] == "low"
+    assert review_artifact["work_item_id"] == review_item["work_item_id"]
+    assert review_results["artifact_type"] == "risk_review"
+    assert review_results["produced_by"] == "hall-marketing-reviewer"
+    assert review_results["approval_recommendation"] == "ready_for_hq_synthesis_mock_only"
+    assert review_results["human_approval_required"] is True
+
+
+def test_mock_run_creates_hq_synthesis_artifact() -> None:
+    client, fake = client_with_fake_agent_bus()
+
+    response = client.post(
+        "/api/v1/marketing/weekly-command-brief/mock-run",
+        headers={"Authorization": "Bearer admin-token"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    synthesis_item = work_item_for_role(fake, "hq_synthesis")
+    synthesis_artifact = evidence_packet_for_type(fake, "synthesis_memo")
+    synthesis_results = synthesis_artifact["test_results"]
+    assert synthesis_artifact["work_item_id"] == synthesis_item["work_item_id"]
+    assert synthesis_results["artifact_type"] == "synthesis_memo"
+    assert synthesis_results["produced_by"] == "clone-banks-hq"
+    assert synthesis_results["approval_status"] == "awaiting_human_approval_mock_only"
+    assert "workflow_created" in synthesis_results["metric_watchlist"]
 
 
 def test_mock_weekly_marketing_command_brief_accepts_existing_admin_header() -> None:
@@ -229,18 +296,18 @@ def test_marketing_workflow_summary_returns_expected_structure_for_mock_workflow
     assert data["requested_by"] == "Hall"
     assert data["human_owner"] == "Hall"
     assert data["approval_required"] is True
-    assert data["status"] == "ready_for_review"
+    assert data["status"] == "awaiting_human_approval"
     assert len(data["agents"]) == 6
     assert len(data["specialist_work_items"]) == 4
-    assert len(data["evidence_packets"]) == 4
+    assert len(data["evidence_packets"]) == 6
     assert data["review"]["review_agent"] == "hall-marketing-reviewer"
     assert data["synthesis"]["agent_id"] == "clone-banks-hq"
     assert data["readiness"]["specialist_evidence_complete"] is True
-    assert data["readiness"]["review_complete"] is False
-    assert data["readiness"]["synthesis_complete"] is False
-    assert data["readiness"]["human_approval_ready"] is False
-    assert data["missing"] == ["review_packet", "hq_synthesis_packet", "human_approval"]
-    assert data["next_action"] == "Run marketing reviewer or complete mock review packet."
+    assert data["readiness"]["review_complete"] is True
+    assert data["readiness"]["synthesis_complete"] is True
+    assert data["readiness"]["human_approval_ready"] is True
+    assert data["missing"] == []
+    assert data["next_action"] == "Hall can review the mock HQ synthesis memo. No production action is allowed from mock evidence."
     assert data["links"]["agent_bus_mission_control"] == "http://127.0.0.1:8050/api/v1/mission-control/snapshot"
     assert data["links"]["orchestrator_snapshot"] == "http://127.0.0.1:8055/api/v1/orchestrator/snapshot"
 
@@ -249,6 +316,48 @@ def test_marketing_workflow_summary_returns_expected_structure_for_mock_workflow
     assert data_agent["status"] == "completed"
     assert data_agent["evidence_count"] == 1
     assert data_agent["evidence_types"] == ["analytics_snapshot"]
+
+
+def test_marketing_workflow_summary_displays_reviewer_artifact() -> None:
+    client, fake = client_with_fake_agent_bus()
+    workflow_id = run_mock_workflow(client)
+    review_artifact = evidence_packet_for_type(fake, "risk_review")
+
+    response = client.get(
+        f"/api/v1/marketing/workflows/{workflow_id}/summary",
+        headers={"Authorization": "Bearer admin-token"},
+    )
+
+    assert response.status_code == 200
+    review = response.json()["review"]
+    assert review["status"] == "completed"
+    assert review["artifact_type"] == "risk_review"
+    assert review["artifact_id"] == review_artifact["evidence_id"]
+    assert review["review_packet_ids"] == [fake.review_packets[0]["review_id"]]
+    assert review["approval_recommendation"] == "ready_for_hq_synthesis_mock_only"
+    assert review["risk_flags"] == [
+        "mock_only_no_business_decisions",
+        "requires_real_data_before_operational_use",
+    ]
+
+
+def test_marketing_workflow_summary_displays_hq_synthesis_artifact() -> None:
+    client, fake = client_with_fake_agent_bus()
+    workflow_id = run_mock_workflow(client)
+    synthesis_artifact = evidence_packet_for_type(fake, "synthesis_memo")
+
+    response = client.get(
+        f"/api/v1/marketing/workflows/{workflow_id}/summary",
+        headers={"Authorization": "Bearer admin-token"},
+    )
+
+    assert response.status_code == 200
+    synthesis = response.json()["synthesis"]
+    assert synthesis["status"] == "completed"
+    assert synthesis["artifact_type"] == "synthesis_memo"
+    assert synthesis["artifact_id"] == synthesis_artifact["evidence_id"]
+    assert synthesis["approval_status"] == "awaiting_human_approval_mock_only"
+    assert synthesis["summary"] == "Mock Weekly Marketing Command Brief synthesized from specialist mock evidence and mock reviewer packet."
 
 
 def test_marketing_workflow_summary_missing_workflow_returns_404() -> None:
@@ -276,11 +385,9 @@ def test_marketing_workflow_summary_agent_bus_unavailable_returns_clean_error() 
     assert "Agent Bus" in response.json()["detail"]["message"]
 
 
-def test_marketing_workflow_summary_readiness_flags_change_when_packets_are_completed() -> None:
-    client, fake = client_with_fake_agent_bus()
+def test_marketing_workflow_summary_readiness_flags_are_true_when_review_and_synthesis_artifacts_exist() -> None:
+    client, _fake = client_with_fake_agent_bus()
     workflow_id = run_mock_workflow(client)
-    mark_review_complete(fake)
-    mark_synthesis_complete(fake)
 
     response = client.get(
         f"/api/v1/marketing/workflows/{workflow_id}/summary",
@@ -296,15 +403,13 @@ def test_marketing_workflow_summary_readiness_flags_change_when_packets_are_comp
         "synthesis_complete": True,
         "human_approval_ready": True,
     }
-    assert data["missing"] == ["human_approval"]
-    assert data["next_action"] == "Hall review is ready for human approval."
+    assert data["missing"] == []
+    assert data["next_action"] == "Hall can review the mock HQ synthesis memo. No production action is allowed from mock evidence."
 
 
 def test_marketing_workflow_summary_next_action_reaches_completed_after_human_approval() -> None:
     client, fake = client_with_fake_agent_bus()
     workflow_id = run_mock_workflow(client)
-    mark_review_complete(fake)
-    mark_synthesis_complete(fake)
     mark_human_approved(fake)
 
     response = client.get(
@@ -318,3 +423,26 @@ def test_marketing_workflow_summary_next_action_reaches_completed_after_human_ap
     assert data["readiness"]["human_approval_ready"] is False
     assert data["missing"] == []
     assert data["next_action"] == "Marketing workflow summary is complete."
+
+
+def test_mock_only_safeguards_are_present_on_review_and_synthesis_artifacts() -> None:
+    client, fake = client_with_fake_agent_bus()
+
+    response = client.post(
+        "/api/v1/marketing/weekly-command-brief/mock-run",
+        headers={"Authorization": "Bearer admin-token"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    for artifact_type in ["risk_review", "synthesis_memo"]:
+        packet = evidence_packet_for_type(fake, artifact_type)
+        results = packet["test_results"]
+        assert results["mode"] == "mock_only"
+        assert results["confidence"] == "mock_only"
+        assert results["mock_only"] is True
+        assert results["live_platform_access"] is False
+        assert "Real agent execution and live marketing source data are intentionally not connected." in packet["unverified_items"]
+    review_results = evidence_packet_for_type(fake, "risk_review")["test_results"]
+    assert "no production actions are requested" in review_results["checked"]
+    assert "No external action is approved by this mock review." in review_results["findings"]

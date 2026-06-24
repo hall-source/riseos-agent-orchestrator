@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This endpoint is the first read-only Marketing Mission Control view for the mock Weekly Marketing Command Brief flow.
+This endpoint is the read-only Marketing Mission Control view for the mock Weekly Marketing Command Brief flow.
 
-It turns raw Agent Bus work items and evidence packet IDs into one operational summary so Hall can see what exists, what is missing, and what should happen next without manually reading the raw Agent Bus snapshot.
+It turns raw Agent Bus work items, review packet references, and evidence packet IDs into one operational summary so Hall can see what exists, what is missing, and what should happen next without manually reading the raw Agent Bus snapshot.
 
 ## Endpoint
 
@@ -54,7 +54,7 @@ curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/summary \
   "brand": "rise",
   "business_unit": "RISE Commercial District",
   "source_event": "manual_mock_request",
-  "status": "ready_for_review",
+  "status": "awaiting_human_approval",
   "requested_by": "Hall",
   "human_owner": "Hall",
   "approval_required": true,
@@ -75,24 +75,36 @@ curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/summary \
   "review": {
     "review_agent": "hall-marketing-reviewer",
     "work_item_id": "00000000-0000-0000-0000-000000000000",
-    "status": "queued",
-    "evidence_count": 0,
-    "ready": false
+    "status": "completed",
+    "artifact_type": "risk_review",
+    "artifact_id": "00000000-0000-0000-0000-000000000000",
+    "review_packet_ids": ["00000000-0000-0000-0000-000000000000"],
+    "approval_recommendation": "ready_for_hq_synthesis_mock_only",
+    "risk_flags": [
+      "mock_only_no_business_decisions",
+      "requires_real_data_before_operational_use"
+    ],
+    "evidence_count": 1,
+    "ready": true
   },
   "synthesis": {
     "agent_id": "clone-banks-hq",
     "work_item_id": "00000000-0000-0000-0000-000000000000",
-    "status": "queued",
-    "ready": false
+    "status": "completed",
+    "artifact_type": "synthesis_memo",
+    "artifact_id": "00000000-0000-0000-0000-000000000000",
+    "approval_status": "awaiting_human_approval_mock_only",
+    "summary": "Mock Weekly Marketing Command Brief synthesized from specialist mock evidence and mock reviewer packet.",
+    "ready": true
   },
   "readiness": {
     "specialist_evidence_complete": true,
-    "review_complete": false,
-    "synthesis_complete": false,
-    "human_approval_ready": false
+    "review_complete": true,
+    "synthesis_complete": true,
+    "human_approval_ready": true
   },
-  "missing": ["review_packet", "hq_synthesis_packet", "human_approval"],
-  "next_action": "Run marketing reviewer or complete mock review packet.",
+  "missing": [],
+  "next_action": "Hall can review the mock HQ synthesis memo. No production action is allowed from mock evidence.",
   "links": {
     "agent_bus_mission_control": "http://127.0.0.1:8050/api/v1/mission-control/snapshot",
     "orchestrator_snapshot": "http://127.0.0.1:8055/api/v1/orchestrator/snapshot"
@@ -116,6 +128,21 @@ It identifies item roles from `metadata.work_item_role`:
 
 It fetches canonical evidence packet details from each work item's `metadata.evidence_packet_ids`.
 
+The reviewer summary is populated from the attached evidence packet whose `test_results.artifact_type` or `test_results.evidence_type` is `risk_review`. The canonical Agent Bus review packet id is exposed from the reviewer work item's `metadata.review_packet_ids`.
+
+The HQ synthesis summary is populated from the attached evidence packet whose `test_results.artifact_type` or `test_results.evidence_type` is `synthesis_memo`.
+
+## Readiness Calculation
+
+The summary sets readiness flags as follows:
+
+- `specialist_evidence_complete`: every specialist work item exists and has at least one evidence packet
+- `review_complete`: reviewer work item has an attached `risk_review` artifact, or a legacy review packet reference exists
+- `synthesis_complete`: HQ work item has an attached `synthesis_memo` artifact, or a legacy synthesis packet reference exists
+- `human_approval_ready`: specialist evidence, review, and synthesis are complete, approval is required, and human approval has not yet been recorded
+
+When `human_approval_ready=true`, `missing` is empty because the system has everything needed for Hall to review. It does not mean approval has already happened.
+
 ## Marketing Mission Control Support
 
 This gives Marketing Mission Control a stable backend summary before any frontend exists. It provides enough shape for a run card:
@@ -123,8 +150,9 @@ This gives Marketing Mission Control a stable backend summary before any fronten
 - workflow metadata
 - per-agent status
 - specialist evidence completeness
-- reviewer readiness
-- HQ synthesis readiness
+- reviewer artifact and risk flags
+- HQ synthesis memo status and summary
+- human approval readiness
 - missing operational pieces
 - next action
 - raw snapshot links
@@ -132,12 +160,11 @@ This gives Marketing Mission Control a stable backend summary before any fronten
 ## Known Limitations
 
 - The endpoint is read-only and does not execute agents.
-- The current mock run creates specialist evidence packets only.
-- Review completion is inferred from review work-item status or `metadata.review_packet_ids`.
-- HQ synthesis completion is inferred from synthesis work-item status or `metadata.hq_synthesis_packet_ids` / `metadata.synthesis_packet_ids`.
-- Human approval is inferred from `metadata.human_approval_status` or `metadata.human_approval`.
+- Review and synthesis artifacts are generated by mock logic during the mock run.
+- The richer risk review is stored as an evidence artifact because the canonical Agent Bus review packet model is intentionally lifecycle-focused.
+- Human approval readiness is visible, but durable approval action is not implemented yet.
 - No live marketing source data is connected.
 
 ## Recommended Next PR
 
-Create canonical mock review and HQ synthesis packet records so this summary can display real reviewer/HQ artifacts instead of inferred readiness metadata.
+Add a Marketing Agent Worker Adapter contract that can replace mock artifact generation with controlled worker execution while keeping live integrations disabled until approval boundaries are tested.

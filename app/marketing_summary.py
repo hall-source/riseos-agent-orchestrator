@@ -16,6 +16,8 @@ from app.marketing_loop import (
 BLOCKED_STATUSES = {"blocked", "failed", "rejected"}
 COMPLETE_STATUSES = {"approved", "completed"}
 ACTIVE_STATUSES = {"claimed", "in_progress", "awaiting_evidence", "ready_for_review", "review_in_progress"}
+REVIEW_ARTIFACT_TYPE = "risk_review"
+SYNTHESIS_ARTIFACT_TYPE = "synthesis_memo"
 
 
 class MarketingSummaryAgent(BaseModel):
@@ -31,6 +33,11 @@ class MarketingReviewSummary(BaseModel):
     review_agent: str
     work_item_id: str | None = None
     status: str
+    artifact_type: str | None = None
+    artifact_id: str | None = None
+    review_packet_ids: list[str] = Field(default_factory=list)
+    approval_recommendation: str | None = None
+    risk_flags: list[str] = Field(default_factory=list)
     evidence_count: int = 0
     ready: bool = False
 
@@ -39,6 +46,10 @@ class MarketingSynthesisSummary(BaseModel):
     agent_id: str
     work_item_id: str | None = None
     status: str
+    artifact_type: str | None = None
+    artifact_id: str | None = None
+    approval_status: str | None = None
+    summary: str | None = None
     ready: bool = False
 
 
@@ -107,6 +118,10 @@ async def build_marketing_workflow_summary(
     specialist_items = [_item_for_agent(work_items, agent_id, role="specialist_evidence") for agent_id in SPECIALIST_AGENTS]
     review_item = _item_for_agent(work_items, REVIEW_AGENT, role="marketing_review")
     synthesis_item = _item_for_agent(work_items, SYNTHESIS_AGENT, role="hq_synthesis")
+    review_artifact = _artifact_packet_for_item(review_item, evidence_by_work_item, REVIEW_ARTIFACT_TYPE)
+    synthesis_artifact = _artifact_packet_for_item(synthesis_item, evidence_by_work_item, SYNTHESIS_ARTIFACT_TYPE)
+    review_content = _artifact_content(review_artifact)
+    synthesis_content = _artifact_content(synthesis_artifact)
     representative_metadata = _representative_metadata(work_items)
 
     agents = [
@@ -120,8 +135,8 @@ async def build_marketing_workflow_summary(
         item is not None and _evidence_count(item, evidence_by_work_item) > 0
         for item in specialist_items
     )
-    review_complete = _review_complete(review_item)
-    synthesis_complete = _synthesis_complete(synthesis_item)
+    review_complete = review_artifact is not None or _review_metadata_complete(review_item)
+    synthesis_complete = synthesis_artifact is not None or _synthesis_metadata_complete(synthesis_item)
     human_approved = _human_approved(work_items)
     approval_required = bool(representative_metadata.get("approval_required", True))
     readiness = MarketingReadinessSummary(
@@ -158,14 +173,23 @@ async def build_marketing_workflow_summary(
         review=MarketingReviewSummary(
             review_agent=REVIEW_AGENT,
             work_item_id=_work_item_id(review_item),
-            status=_item_status(review_item),
+            status=_artifact_status(review_item, review_artifact),
+            artifact_type=_artifact_type(review_artifact),
+            artifact_id=_artifact_id(review_artifact),
+            review_packet_ids=_review_packet_ids(review_item),
+            approval_recommendation=_string_or_none(review_content.get("approval_recommendation")),
+            risk_flags=_string_list(review_content.get("risk_flags")),
             evidence_count=_evidence_count(review_item, evidence_by_work_item),
             ready=review_complete,
         ),
         synthesis=MarketingSynthesisSummary(
             agent_id=SYNTHESIS_AGENT,
             work_item_id=_work_item_id(synthesis_item),
-            status=_item_status(synthesis_item),
+            status=_artifact_status(synthesis_item, synthesis_artifact),
+            artifact_type=_artifact_type(synthesis_artifact),
+            artifact_id=_artifact_id(synthesis_artifact),
+            approval_status=_string_or_none(synthesis_content.get("approval_status")),
+            summary=_string_or_none(synthesis_content.get("summary")),
             ready=synthesis_complete,
         ),
         readiness=readiness,
@@ -218,7 +242,7 @@ def _agent_status(role: str, item: dict[str, Any] | None, evidence_type_count: i
         return "blocked"
     if status in COMPLETE_STATUSES:
         return "completed"
-    if role == "specialist" and evidence_type_count > 0:
+    if role in {"specialist", "review", "synthesis"} and evidence_type_count > 0:
         return "completed"
     if status in ACTIVE_STATUSES or status == "queued":
         return "in_progress"
@@ -261,7 +285,7 @@ def _missing_items(
         missing.append("review_packet")
     if not readiness.synthesis_complete:
         missing.append("hq_synthesis_packet")
-    if approval_required and not human_approved:
+    if approval_required and not human_approved and not readiness.human_approval_ready:
         missing.append("human_approval")
     return missing
 
@@ -276,18 +300,18 @@ def _next_action(status: str, missing: list[str], readiness: MarketingReadinessS
     if "hq_synthesis_packet" in missing:
         return "Run Clone Banks HQ synthesis or complete mock synthesis packet."
     if readiness.human_approval_ready:
-        return "Hall review is ready for human approval."
+        return "Hall can review the mock HQ synthesis memo. No production action is allowed from mock evidence."
     return "Marketing workflow summary is complete."
 
 
-def _review_complete(item: dict[str, Any] | None) -> bool:
+def _review_metadata_complete(item: dict[str, Any] | None) -> bool:
     if item is None:
         return False
     metadata = _metadata(item)
     return _item_status(item) in COMPLETE_STATUSES or bool(metadata.get("review_packet_ids"))
 
 
-def _synthesis_complete(item: dict[str, Any] | None) -> bool:
+def _synthesis_metadata_complete(item: dict[str, Any] | None) -> bool:
     if item is None:
         return False
     metadata = _metadata(item)
@@ -330,6 +354,15 @@ def _evidence_ids(item: dict[str, Any]) -> list[str]:
     return [str(value) for value in raw_ids if value]
 
 
+def _review_packet_ids(item: dict[str, Any] | None) -> list[str]:
+    if item is None:
+        return []
+    raw_ids = _metadata(item).get("review_packet_ids", [])
+    if not isinstance(raw_ids, list):
+        return []
+    return [str(value) for value in raw_ids if value]
+
+
 def _evidence_by_work_item(evidence_packets: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for packet in evidence_packets:
@@ -350,11 +383,50 @@ def _evidence_types(item: dict[str, Any] | None, evidence_by_work_item: dict[str
         return []
     types: list[str] = []
     for packet in evidence_by_work_item.get(work_item_id, []):
-        test_results = packet.get("test_results") if isinstance(packet.get("test_results"), dict) else {}
-        evidence_type = test_results.get("evidence_type") or packet.get("type")
-        if evidence_type:
-            types.append(str(evidence_type))
+        artifact_type = _artifact_type(packet)
+        if artifact_type:
+            types.append(artifact_type)
     return sorted(set(types))
+
+
+def _artifact_packet_for_item(
+    item: dict[str, Any] | None,
+    evidence_by_work_item: dict[str, list[dict[str, Any]]],
+    artifact_type: str,
+) -> dict[str, Any] | None:
+    work_item_id = _work_item_id(item)
+    if not work_item_id:
+        return None
+    for packet in evidence_by_work_item.get(work_item_id, []):
+        if _artifact_type(packet) == artifact_type:
+            return packet
+    return None
+
+
+def _artifact_content(packet: dict[str, Any] | None) -> dict[str, Any]:
+    if packet is None:
+        return {}
+    test_results = packet.get("test_results")
+    return test_results if isinstance(test_results, dict) else {}
+
+
+def _artifact_type(packet: dict[str, Any] | None) -> str | None:
+    content = _artifact_content(packet)
+    value = content.get("artifact_type") or content.get("evidence_type") or packet.get("type") if packet else None
+    return str(value) if value else None
+
+
+def _artifact_id(packet: dict[str, Any] | None) -> str | None:
+    if packet is None:
+        return None
+    value = packet.get("evidence_id") or packet.get("id")
+    return str(value) if value else None
+
+
+def _artifact_status(item: dict[str, Any] | None, packet: dict[str, Any] | None) -> str:
+    if packet is not None:
+        return "completed"
+    return _item_status(item)
 
 
 def _metadata(item: dict[str, Any]) -> dict[str, Any]:
@@ -373,6 +445,16 @@ def _work_item_id(item: dict[str, Any] | None) -> str | None:
         return None
     value = item.get("work_item_id") or item.get("id")
     return str(value) if value else None
+
+
+def _string_or_none(value: Any) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
 
 
 def _min_timestamp(items: list[dict[str, Any]], key: str) -> str | None:
