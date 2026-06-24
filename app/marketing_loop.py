@@ -200,7 +200,7 @@ class MockWeeklyMarketingBriefResponse(BaseModel):
     created_evidence_packets: list[str] = Field(default_factory=list)
     review_item_id: str
     synthesis_item_id: str
-    review_packet_id: str
+    review_packet_id: str | None = None
     review_artifact_id: str
     synthesis_artifact_id: str
     mission_control_url: str
@@ -266,12 +266,7 @@ async def create_mock_weekly_marketing_command_brief(
 
     review_item = await agent_bus_client.create_work_item(_review_work_item_payload(specialist_item_ids, context))
     review_item_id = _response_id(review_item, "work_item_id")
-    review_packet = await agent_bus_client.create_review_packet(_review_packet_payload(review_item_id))
-    review_packet_id = _response_id(review_packet, "review_id")
-    await agent_bus_client.attach_review_to_work_item(
-        review_item_id,
-        {"review_id": review_packet_id, "actor": "riseos-agent-orchestrator"},
-    )
+    review_packet_id = await _create_and_attach_review_packet(agent_bus_client, review_item_id)
     review_artifact = await agent_bus_client.create_evidence_packet(_risk_review_artifact_payload(review_item_id, specialist_item_ids, review_packet_id, context))
     review_artifact_id = _response_id(review_artifact, "evidence_id")
     created_evidence_packets.append(review_artifact_id)
@@ -413,6 +408,21 @@ def _evidence_packet_payload(agent_id: str, work_item_id: str, context: MockMark
     }
 
 
+async def _create_and_attach_review_packet(client: MarketingAgentBusClient, review_item_id: str) -> str | None:
+    try:
+        review_packet = await client.create_review_packet(_review_packet_payload(review_item_id))
+        review_packet_id = _response_id(review_packet, "review_id")
+        await client.attach_review_to_work_item(
+            review_item_id,
+            {"review_id": review_packet_id, "actor": "riseos-agent-orchestrator"},
+        )
+    except AgentBusAPIError as exc:
+        if exc.status_code not in {404, 405, 500, 501}:
+            raise
+        return None
+    return review_packet_id
+
+
 def _review_packet_payload(review_item_id: str) -> dict[str, Any]:
     return {
         "work_item_id": review_item_id,
@@ -428,7 +438,7 @@ def _review_packet_payload(review_item_id: str) -> dict[str, Any]:
 def _risk_review_artifact_payload(
     review_item_id: str,
     specialist_item_ids: dict[str, str],
-    review_packet_id: str,
+    review_packet_id: str | None,
     context: MockMarketingLoopContext,
 ) -> dict[str, Any]:
     artifact = {
@@ -438,6 +448,8 @@ def _risk_review_artifact_payload(
         "mock_only": True,
         "live_platform_access": False,
     }
+    if review_packet_id is None:
+        artifact["canonical_review_packet_status"] = "unavailable_fell_back_to_evidence_packet"
     return _governance_artifact_payload(
         work_item_id=review_item_id,
         agent_id=REVIEW_AGENT,
