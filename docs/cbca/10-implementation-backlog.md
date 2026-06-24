@@ -34,6 +34,17 @@
 | Add deferred specialist completion option | `riseos-agent-orchestrator` | `auto_complete_specialists=false` lets worker attach evidence |
 | Add worker adapter tests | `riseos-agent-orchestrator` | Registry, eligibility, safety flags, endpoint auth |
 
+## Priority 1B: Marketing Governance Stage Runner
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add governance run contract models | `riseos-agent-orchestrator` | Run-once request/response and reviewer/HQ stage results |
+| Add callable mock governance runner | `riseos-agent-orchestrator` | Validates specialist evidence, then creates review and synthesis artifacts |
+| Add admin-protected governance endpoint | `riseos-agent-orchestrator` | `POST /api/v1/marketing/governance/mock/run-once` |
+| Add safe execution flag | `riseos-agent-orchestrator` | `ENABLE_MARKETING_GOVERNANCE_MOCK=true` required |
+| Update summary next actions | `riseos-agent-orchestrator` | Worker first, then reviewer/HQ, then Hall review |
+| Add governance runner tests | `riseos-agent-orchestrator` | Auth, flag, evidence validation, artifact references, mock safeguards |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
