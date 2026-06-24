@@ -4,7 +4,7 @@
 
 The mock-only Clone Banks Marketing Agent Loop is implemented in `riseos-agent-orchestrator`.
 
-The implemented loop is:
+The default mock loop remains fully self-contained:
 
 ```text
 manual mock request
@@ -20,13 +20,23 @@ manual mock request
 -> Agent Bus Mission Control snapshot can show resulting agents, work items, and evidence references
 ```
 
+The worker-adapter contract adds a second mock validation path:
+
+```text
+manual mock request with auto_complete_specialists=false
+-> Orchestrator creates specialist, reviewer, and HQ work items
+-> Marketing Worker Adapter claims specialist work
+-> Marketing Worker Adapter attaches deterministic mock evidence
+-> summary shows specialist evidence complete while review/HQ remain pending
+```
+
 The read-only Marketing Mission Control summary view is also implemented:
 
 ```text
 GET /api/v1/marketing/workflows/{workflow_id}/summary
 ```
 
-It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run, then displays the actual reviewer and HQ synthesis artifacts.
+It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run, then displays specialist evidence, reviewer artifacts, and HQ synthesis artifacts when they exist.
 
 ## Mock Run Endpoint
 
@@ -45,6 +55,30 @@ It also accepts the bearer-token form:
 ```text
 Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN
 ```
+
+The request supports:
+
+```json
+{
+  "auto_complete_specialists": true
+}
+```
+
+Default `true` preserves the PR #2 through PR #4 behavior. Set it to `false` when validating the Marketing Worker Adapter contract.
+
+## Worker Run-Once Endpoint
+
+```http
+POST /api/v1/marketing/workers/mock/run-once
+```
+
+This endpoint is admin-protected and disabled unless:
+
+```bash
+ENABLE_MARKETING_WORKER_MOCK=true
+```
+
+It runs one bounded mock worker pass over eligible Agent Bus specialist work items. It does not run as a daemon.
 
 ## Summary Endpoint
 
@@ -79,11 +113,14 @@ The mock run uses this metadata convention:
   "source_event": "manual_mock_request",
   "approval_required": true,
   "human_owner": "Hall",
-  "review_agent": "hall-marketing-reviewer"
+  "review_agent": "hall-marketing-reviewer",
+  "mock_mode": true
 }
 ```
 
 Runtime metadata also includes `mvp_mode=mock_only` and `live_platform_access=false`.
+
+Specialist work items include `worker_role=specialist` so the worker adapter can safely route them while preserving the existing `work_item_role=specialist_evidence` summary convention.
 
 ## Required Agents
 
@@ -143,7 +180,7 @@ curl -sS http://127.0.0.1:8050/health
 curl -sS http://127.0.0.1:8055/health
 ```
 
-Create a mock run:
+Create a worker-validation mock run:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/weekly-command-brief/mock-run \
@@ -152,7 +189,20 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/weekly-command-brief/moc
   -d '{
     "business_unit": "RISE Commercial District",
     "requested_by": "Hall",
-    "date_range_label": "mock_last_7_days"
+    "date_range_label": "mock_last_7_days",
+    "auto_complete_specialists": false
+  }' | jq .
+```
+
+Run the mock worker once:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/workers/mock/run-once \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflow_id":"'$WORKFLOW_ID'",
+    "max_items":4
   }' | jq .
 ```
 
@@ -178,33 +228,27 @@ curl -sS http://127.0.0.1:8055/api/v1/orchestrator/snapshot | jq .
 ## Test Plan
 
 ```bash
+pytest tests/test_marketing_worker.py
 pytest tests/test_marketing_loop.py
 pytest
 ```
 
-The focused tests use a fake Agent Bus client and verify:
+Focused tests use fake Agent Bus clients and verify:
 
-- missing admin token is rejected
-- bearer-token admin auth is accepted
-- existing `X-Orchestrator-Admin-Token` auth still works
-- all six marketing agents are seeded
-- four specialist work items are created
-- four canonical mock specialist evidence packets are created and attached
-- reviewer and Clone Banks HQ synthesis items are created
-- one canonical Agent Bus review packet is created and attached when available
-- `risk_review` and `synthesis_memo` artifacts are created and attached
-- summary returns the expected structure for a mock workflow
-- summary displays reviewer artifact fields from the actual packet
-- summary displays HQ synthesis artifact fields from the actual packet
-- missing workflow returns `404`
-- Agent Bus unavailable returns a clean degraded error
-- readiness flags become true when review and synthesis artifacts exist
-- next action changes to human review once synthesis exists
-- mock-only safeguards remain present
+- marketing registry contains the required six agents
+- worker can process one eligible mock specialist item
+- worker refuses unknown agents and unsupported evidence types
+- worker does not process non-marketing work
+- worker does not process live-mode work while live integrations are disabled
+- worker evidence is mock-only and has `live_platform_access=false`
+- run-once endpoint requires admin auth
+- run-once endpoint respects `ENABLE_MARKETING_WORKER_MOCK`
+- existing mock-loop default behavior remains backward compatible
 
 ## Known Limitations
 
 - This is a mock orchestration proof only; it does not execute specialist agents.
+- The worker adapter runs only when called directly or through the run-once endpoint; it is not a daemon.
 - Reviewer and HQ synthesis artifacts are generated by deterministic mock logic, not live agents.
 - The Agent Bus review packet model stores lifecycle review fields; the richer marketing governance review content is attached as a `risk_review` evidence artifact.
 - If the deployed Agent Bus review lifecycle route is unavailable, the canonical review packet id is omitted and the `risk_review` artifact remains the summary source of truth.
@@ -215,4 +259,4 @@ The focused tests use a fake Agent Bus client and verify:
 
 ## Recommended Next PR
 
-Add the Marketing Agent Worker Adapter contract so real worker execution can eventually replace mock artifact generation while preserving these governance and approval boundaries.
+Add a reviewer/HQ stage runner contract so specialist evidence produced by the worker can trigger mock governance artifacts without the original mock-run endpoint generating them upfront.
