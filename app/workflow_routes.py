@@ -12,6 +12,7 @@ from app.clients.agent_bus import AgentBusClient
 from app.clients.github import GitHubClient
 from app.config import Settings, get_settings
 from app.event_store import event_store
+from app.marketing_routes import router as marketing_router
 from app.review_queue import review_queue
 from app.storage import SQLiteStateStore
 from app.workflows import WorkflowCollection, WorkflowRecord, WorkflowTimeline, build_workflows, find_workflow
@@ -139,6 +140,7 @@ def register_workflow_routes(app: FastAPI) -> None:
         return
     app.include_router(router)
     app.include_router(agent_task_router)
+    app.include_router(marketing_router)
     for route in app.router.routes:
         if not hasattr(route, "path"):
             setattr(route, "path", "")
