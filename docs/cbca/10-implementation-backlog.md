@@ -56,6 +56,17 @@
 | Update summary approval state | `riseos-agent-orchestrator` | Shows approval decision and no-production-write status |
 | Add approval tests | `riseos-agent-orchestrator` | Auth, flag, missing prerequisites, decisions, summary, safeguards |
 
+## Priority 1D: Read-Only Fixture Evidence Adapter
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add fixture evidence request/response models | `riseos-agent-orchestrator` | Weekly marketing snapshot fixture only |
+| Add Hall Data Intelligence fixture adapter | `riseos-agent-orchestrator` | Supports only `hall-data-intelligence -> analytics_snapshot` |
+| Add admin-protected fixture attach endpoint | `riseos-agent-orchestrator` | `POST /api/v1/marketing/evidence/read-only-fixture/attach` |
+| Add safe execution flag | `riseos-agent-orchestrator` | `ENABLE_MARKETING_READONLY_EVIDENCE=true` required |
+| Update summary source-mode counts | `riseos-agent-orchestrator` | Shows `mock_generated` and `read_only_fixture` counts |
+| Add fixture evidence tests | `riseos-agent-orchestrator` | Auth, flag, mapping, metrics, safety fields, summary counts |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
