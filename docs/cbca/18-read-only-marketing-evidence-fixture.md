@@ -82,6 +82,7 @@ The adapter creates an Agent Bus evidence packet with:
   "produced_by": "hall-data-intelligence",
   "source_mode": "read_only_fixture",
   "source_label": "weekly_marketing_snapshot_fixture",
+  "mode": "mock_only",
   "fixture": {},
   "derived_metrics": {},
   "confidence": "fixture_only",
@@ -91,6 +92,8 @@ The adapter creates an Agent Bus evidence packet with:
   "approval_required": false
 }
 ```
+
+`mode=mock_only` keeps the existing governance safety check intact. `source_mode=read_only_fixture` is the summary-visible source classification.
 
 ## Summary Behavior
 
@@ -123,6 +126,7 @@ Every attached fixture evidence packet includes:
 ```json
 {
   "source_mode": "read_only_fixture",
+  "mode": "mock_only",
   "live_platform_access": false,
   "write_access": false,
   "not_for_real_marketing_decisions": true
