@@ -35,6 +35,7 @@ class Settings:
     enable_marketing_governance_mock: bool = False
     enable_marketing_approval_mock: bool = False
     enable_marketing_readonly_evidence: bool = False
+    enable_marketing_sheets_readonly_evidence: bool = False
     agent_bus_base_url: str | None = None
     agent_bus_token: str | None = None
     agent_bus_timeout_seconds: int = 30
@@ -104,6 +105,7 @@ def get_settings() -> Settings:
         enable_marketing_governance_mock=_bool_env("ENABLE_MARKETING_GOVERNANCE_MOCK"),
         enable_marketing_approval_mock=_bool_env("ENABLE_MARKETING_APPROVAL_MOCK"),
         enable_marketing_readonly_evidence=_bool_env("ENABLE_MARKETING_READONLY_EVIDENCE"),
+        enable_marketing_sheets_readonly_evidence=_bool_env("ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE"),
         agent_bus_base_url=os.getenv("AGENT_BUS_BASE_URL"),
         agent_bus_token=os.getenv("AGENT_BUS_TOKEN"),
         agent_bus_timeout_seconds=_int_env("AGENT_BUS_TIMEOUT_SECONDS", 30),
