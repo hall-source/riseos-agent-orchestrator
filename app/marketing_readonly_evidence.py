@@ -54,6 +54,7 @@ async def attach_read_only_fixture_evidence(
             "workflow_type": MARKETING_WORKFLOW_TYPE,
             "source_mode": READ_ONLY_FIXTURE_SOURCE_MODE,
             "source_label": "weekly_marketing_snapshot_fixture",
+            "mode": "mock_only",
             "fixture": fixture,
             "derived_metrics": derived_metrics,
             "confidence": "fixture_only",
