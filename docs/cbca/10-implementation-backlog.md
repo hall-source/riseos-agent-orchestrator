@@ -67,6 +67,19 @@
 | Update summary source-mode counts | `riseos-agent-orchestrator` | Shows `mock_generated` and `read_only_fixture` counts |
 | Add fixture evidence tests | `riseos-agent-orchestrator` | Auth, flag, mapping, metrics, safety fields, summary counts |
 
+## Priority 1E: Google Sheets / Drive Read-Only Evidence Adapter
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add Sheets/Drive evidence request/response models | `riseos-agent-orchestrator` | Supports `google_sheet` and `drive_csv` source descriptors |
+| Add swappable read-only tabular source interface | `riseos-agent-orchestrator` | Local test double first; real connector can be wired later |
+| Add Hall Data Intelligence Sheets adapter | `riseos-agent-orchestrator` | Supports only `hall-data-intelligence -> analytics_snapshot` |
+| Add admin-protected Sheets attach endpoint | `riseos-agent-orchestrator` | `POST /api/v1/marketing/evidence/google-sheets-readonly/attach` |
+| Add safe execution flag | `riseos-agent-orchestrator` | `ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true` required |
+| Preserve no-write evidence safeguards | `riseos-agent-orchestrator` | `live_platform_access=false`, `write_access=false`, planning-only evidence |
+| Keep summary source-mode counts generic | `riseos-agent-orchestrator` | Counts `google_sheets_readonly` and `drive_csv_readonly` when present |
+| Add Sheets adapter tests | `riseos-agent-orchestrator` | Auth, flag, mapping, source errors, metrics, safeguards, summary counts |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
@@ -82,6 +95,7 @@ Do not start this until Hall explicitly approves live read-only integration work
 
 | Platform | First safe scope |
 |---|---|
+| Google Sheets / Drive CSV | Read-only weekly snapshot import through an explicitly configured source reader |
 | Google Ads | Read-only account/campaign summary |
 | GA4 | Read-only weekly traffic/conversion summary |
 | Search Console | Read-only query/page summary |
