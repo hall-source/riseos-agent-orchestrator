@@ -94,6 +94,7 @@ class MarketingWorkflowSummary(BaseModel):
     agents: list[MarketingSummaryAgent] = Field(default_factory=list)
     specialist_work_items: list[dict[str, Any]] = Field(default_factory=list)
     evidence_packets: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_source_modes: dict[str, int] = Field(default_factory=dict)
     review: MarketingReviewSummary
     synthesis: MarketingSynthesisSummary
     human_approval: MarketingHumanApprovalSummary = Field(default_factory=MarketingHumanApprovalSummary)
@@ -192,6 +193,7 @@ async def build_marketing_workflow_summary(
         agents=agents,
         specialist_work_items=[item for item in specialist_items if item is not None],
         evidence_packets=evidence_packets,
+        evidence_source_modes=_evidence_source_mode_counts(evidence_packets),
         review=MarketingReviewSummary(
             review_agent=REVIEW_AGENT,
             work_item_id=_work_item_id(review_item),
@@ -413,6 +415,24 @@ def _evidence_types(item: dict[str, Any] | None, evidence_by_work_item: dict[str
         if artifact_type:
             types.append(artifact_type)
     return sorted(set(types))
+
+
+def _evidence_source_mode_counts(evidence_packets: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for packet in evidence_packets:
+        mode = _evidence_source_mode(packet)
+        counts[mode] = counts.get(mode, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _evidence_source_mode(packet: dict[str, Any]) -> str:
+    content = _artifact_content(packet)
+    source_mode = content.get("source_mode")
+    if source_mode:
+        return str(source_mode)
+    if content.get("mode") == "mock_only" or content.get("confidence") == "mock_only":
+        return "mock_generated"
+    return "unknown"
 
 
 def _artifact_packet_for_item(
