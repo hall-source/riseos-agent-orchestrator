@@ -18,6 +18,14 @@ from app.marketing_loop import (
     MockWeeklyMarketingBriefResponse,
     create_mock_weekly_marketing_command_brief,
 )
+from app.marketing_readonly_evidence import (
+    MarketingReadOnlyEvidenceValidationError,
+    attach_read_only_fixture_evidence,
+)
+from app.marketing_readonly_evidence_contract import (
+    AttachReadOnlyFixtureEvidenceRequest,
+    AttachReadOnlyFixtureEvidenceResponse,
+)
 from app.marketing_summary import (
     MarketingWorkflowNotFoundError,
     MarketingWorkflowSummary,
@@ -77,6 +85,38 @@ async def run_mock_marketing_worker_once(
             workflow_id=payload.workflow_id,
             max_items=payload.max_items,
         )
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentBusAPIError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+@router.post(
+    "/evidence/read-only-fixture/attach",
+    response_model=AttachReadOnlyFixtureEvidenceResponse,
+)
+async def attach_marketing_read_only_fixture_evidence(
+    payload: AttachReadOnlyFixtureEvidenceRequest,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> AttachReadOnlyFixtureEvidenceResponse:
+    if not settings.enable_marketing_readonly_evidence:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_MARKETING_READONLY_EVIDENCE=true is required before attaching read-only fixture evidence.",
+        )
+    client, should_close = _agent_bus_client(request, settings)
+    try:
+        return await attach_read_only_fixture_evidence(
+            agent_bus_client=client,
+            payload=payload,
+        )
+    except MarketingReadOnlyEvidenceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MissingAgentBusBaseUrlError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AgentBusAPIError as exc:

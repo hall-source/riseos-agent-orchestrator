@@ -4,28 +4,13 @@
 
 The mock-only Clone Banks Marketing Agent Loop is implemented in `riseos-agent-orchestrator`.
 
-The default mock loop remains fully self-contained:
-
-```text
-manual mock request
--> Orchestrator creates a mock marketing workflow id
--> Orchestrator registers/seeds marketing agents in Agent Bus
--> Agent Bus receives specialist work items
--> canonical mock specialist evidence packets are created and attached
--> Hall marketing reviewer item is created
--> canonical Agent Bus review packet is created and attached when the deployed Agent Bus review lifecycle is available
--> rich mock risk_review artifact is created and attached
--> Clone Banks HQ synthesis item is created
--> rich mock synthesis_memo artifact is created and attached
--> Agent Bus Mission Control snapshot can show resulting agents, work items, and evidence references
-```
-
-The worker-plus-governance-plus-approval validation path separates execution stages:
+The current staged validation path is:
 
 ```text
 manual mock request with auto_complete_specialists=false
 -> Orchestrator creates specialist, reviewer, and HQ work items
--> Marketing Worker Adapter claims specialist work
+-> optional Hall Data Intelligence read-only fixture evidence is attached
+-> Marketing Worker Adapter claims remaining specialist work
 -> Marketing Worker Adapter attaches deterministic mock evidence
 -> Governance Stage Runner validates specialist evidence exists
 -> Governance Stage Runner creates hall-marketing-reviewer risk_review
@@ -35,89 +20,78 @@ manual mock request with auto_complete_specialists=false
 -> summary shows the durable mock approval decision
 ```
 
-The read-only Marketing Mission Control summary view is also implemented:
+The default mock loop can still auto-complete specialist evidence for backwards compatibility.
 
-```text
-GET /api/v1/marketing/workflows/{workflow_id}/summary
-```
+## Endpoints
 
-It joins Agent Bus work items and evidence packets by the mock workflow metadata created during the mock run, then displays specialist evidence, reviewer artifacts, HQ synthesis artifacts, and mock human approval artifacts when they exist.
-
-## Mock Run Endpoint
+### Mock Run
 
 ```http
 POST /api/v1/marketing/weekly-command-brief/mock-run
 ```
 
-The endpoint is admin-protected. It accepts the existing orchestrator admin header:
+Set `auto_complete_specialists=false` when validating worker, fixture, governance, and approval stages separately.
 
-```text
-X-Orchestrator-Admin-Token: $ORCHESTRATOR_ADMIN_TOKEN
-```
-
-It also accepts the bearer-token form:
-
-```text
-Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN
-```
-
-The request supports:
-
-```json
-{
-  "auto_complete_specialists": true
-}
-```
-
-Default `true` preserves the PR #2 through PR #4 behavior. Set it to `false` when validating the Marketing Worker Adapter, Governance Stage Runner, and Mock Human Approval contracts.
-
-## Worker Run-Once Endpoint
+### Worker Run Once
 
 ```http
 POST /api/v1/marketing/workers/mock/run-once
 ```
 
-This endpoint is admin-protected and disabled unless:
+Requires:
 
 ```bash
 ENABLE_MARKETING_WORKER_MOCK=true
 ```
 
-It runs one bounded mock worker pass over eligible Agent Bus specialist work items. It does not run as a daemon.
+### Read-Only Fixture Evidence
 
-## Governance Run-Once Endpoint
+```http
+POST /api/v1/marketing/evidence/read-only-fixture/attach
+```
+
+Requires:
+
+```bash
+ENABLE_MARKETING_READONLY_EVIDENCE=true
+```
+
+Only this first mapping is supported:
+
+```text
+hall-data-intelligence -> analytics_snapshot
+```
+
+The endpoint accepts a weekly marketing snapshot fixture, calculates simple derived rates, creates an `analytics_snapshot` evidence packet, and attaches it to the provided Hall Data Intelligence work item.
+
+### Governance Run Once
 
 ```http
 POST /api/v1/marketing/governance/mock/run-once
 ```
 
-This endpoint is admin-protected and disabled unless:
+Requires:
 
 ```bash
 ENABLE_MARKETING_GOVERNANCE_MOCK=true
 ```
 
-It validates worker-produced specialist evidence, then creates or reuses governance work items and attaches:
+It creates the `risk_review` and `synthesis_memo` artifacts after specialist evidence exists.
 
-- `risk_review` from `hall-marketing-reviewer`
-- `synthesis_memo` from `clone-banks-hq`
-
-The governance runner refuses to run if specialist work items or specialist evidence packets are missing.
-
-## Mock Approval Endpoints
+### Mock Approval
 
 ```http
 POST /api/v1/marketing/workflows/{workflow_id}/approval
 GET /api/v1/marketing/workflows/{workflow_id}/approval
 ```
 
-The POST endpoint is admin-protected and disabled unless:
+POST requires:
 
 ```bash
 ENABLE_MARKETING_APPROVAL_MOCK=true
 ```
 
-It accepts:
+Supported decisions:
 
 ```text
 approve_mock
@@ -125,122 +99,55 @@ reject_mock
 request_changes
 ```
 
-and stores the mapped mock-only state in a `human_approval` evidence artifact:
-
-```text
-approved_mock_only
-rejected_mock_only
-changes_requested_mock_only
-```
-
-The GET endpoint returns `not_approved` when no approval artifact exists.
-
-## Summary Endpoint
+### Summary
 
 ```http
 GET /api/v1/marketing/workflows/{workflow_id}/summary
 ```
 
-The endpoint is read-only and admin-protected with the same auth patterns as the mock-run endpoint. It does not create, update, or execute work items.
+The summary endpoint reads Agent Bus work items and evidence packets, then reports:
 
-The summary endpoint:
+- specialist evidence status
+- reviewer `risk_review`
+- HQ `synthesis_memo`
+- human approval state
+- readiness flags
+- next action
+- evidence source-mode counts, including `mock_generated` and `read_only_fixture`
 
-- accepts a `workflow_id`
-- lists Agent Bus work items for `hall-source/riseos-agent-orchestrator`
-- filters work items where `metadata.workflow_id` matches the requested workflow
-- fetches attached evidence packets from `metadata.evidence_packet_ids`
-- groups specialists, reviewer, and Clone Banks HQ synthesis items
-- reads `risk_review`, `synthesis_memo`, and `human_approval` artifact contents from actual attached evidence packets
-- computes readiness flags, missing packets, workflow status, human approval state, and a plain-English next action
-- tells callers to run the specialist worker before governance when specialist evidence is missing
-- tells callers to run HQ synthesis when review exists but the HQ memo is missing
-- shows approved/rejected/change-requested decisions without triggering production action
-- returns `404` when no matching workflow work items exist
-- returns a clean degraded error when Agent Bus is unavailable
+## Agent Bus Evidence Decision
 
-## Mock Metadata
-
-The mock run uses this metadata convention:
-
-```json
-{
-  "domain": "marketing",
-  "brand": "rise",
-  "business_unit": "RISE Commercial District",
-  "workflow_type": "weekly_marketing_command_brief",
-  "source_event": "manual_mock_request",
-  "approval_required": true,
-  "human_owner": "Hall",
-  "review_agent": "hall-marketing-reviewer",
-  "mock_mode": true
-}
-```
-
-Runtime metadata also includes `mvp_mode=mock_only` and `live_platform_access=false`.
-
-Specialist work items include `worker_role=specialist` so the worker adapter can safely route them while preserving the existing `work_item_role=specialist_evidence` summary convention.
-
-## Required Agents
+Agent Bus evidence packets remain the durable carrier for rich marketing artifacts:
 
 ```text
-clone-banks-hq
-hall-data-intelligence
-hall-ppc-intelligence
-hall-seo-intelligence
-hall-creative-strategist
-hall-marketing-reviewer
+analytics_snapshot
+risk_review
+synthesis_memo
+human_approval
 ```
 
-## Agent Bus Evidence And Review Route Decision
+No Agent Bus code change is required for the fixture adapter contract.
 
-Agent Bus already exposes canonical evidence lifecycle routes:
-
-```text
-POST /evidence-packets
-POST /work-items/{work_item_id}/evidence
-GET /evidence-packets/{evidence_id}
-GET /work-items?repository=...
-```
-
-Agent Bus also defines canonical review lifecycle routes:
-
-```text
-POST /review-packets
-POST /work-items/{work_item_id}/review
-GET /review-packets/{review_id}
-```
-
-No Agent Bus code change was needed. The orchestrator Agent Bus client prefers the existing review routes for the reviewer lifecycle packet. If a deployed Agent Bus build does not have those routes fully installed, the mock run falls back to the rich `risk_review` evidence artifact and keeps the workflow safe and reviewable.
-
-The richer governance and approval payloads are stored in evidence packets with `artifact_type` / `evidence_type` values of `risk_review`, `synthesis_memo`, and `human_approval`.
-
-## Live Integration Boundary
+## Safety Boundary
 
 This MVP does not connect to live Google Ads, HubSpot, GA4, Search Console, Slack, Monday, Drive, OpenAI, or ChatGPT agents.
 
-All evidence, governance, and approval artifacts are mock-only and explicitly marked with:
+Read-only fixture evidence is not live data. Every fixture packet includes:
 
 ```json
 {
-  "mode": "mock_only",
-  "confidence": "mock_only",
-  "mock_mode": true,
+  "source_mode": "read_only_fixture",
   "live_platform_access": false,
-  "not_for_real_marketing_decisions": true,
-  "no_production_write_performed": true
+  "write_access": false,
+  "not_for_real_marketing_decisions": true
 }
 ```
 
-## Local And Vultr Validation Commands
+Mock-generated packets continue to be counted as `mock_generated` in the summary.
 
-Health checks using target Vultr ports:
+## Validation Flow
 
-```bash
-curl -sS http://127.0.0.1:8050/health
-curl -sS http://127.0.0.1:8055/health
-```
-
-Create a worker-validation mock run:
+Create a workflow without auto-completing specialists:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/weekly-command-brief/mock-run \
@@ -254,29 +161,44 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/weekly-command-brief/moc
   }' | jq .
 ```
 
-Run the mock worker once:
+Attach read-only fixture evidence to the Hall Data Intelligence work item:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/evidence/read-only-fixture/attach \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "work_item_id":"'$HALL_DATA_WORK_ITEM_ID'",
+    "workflow_id":"'$WORKFLOW_ID'",
+    "fixture": {
+      "business_unit":"RISE Commercial District",
+      "date_range_label":"fixture_last_7_days",
+      "website_sessions":1000,
+      "leads":100,
+      "qualified_leads":40,
+      "deals_created":10,
+      "pipeline_value":25000,
+      "closed_won_value":5000
+    }
+  }' | jq .
+```
+
+Run remaining mock specialists:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/workers/mock/run-once \
   -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "workflow_id":"'$WORKFLOW_ID'",
-    "max_items":4
-  }' | jq .
+  -d '{"workflow_id":"'$WORKFLOW_ID'","max_items":4}' | jq .
 ```
 
-Run mock governance once:
+Run governance:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/governance/mock/run-once \
   -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "workflow_id":"'$WORKFLOW_ID'",
-    "run_reviewer": true,
-    "run_hq_synthesis": true
-  }' | jq .
+  -d '{"workflow_id":"'$WORKFLOW_ID'","run_reviewer":true,"run_hq_synthesis":true}' | jq .
 ```
 
 Approve mock synthesis:
@@ -285,25 +207,14 @@ Approve mock synthesis:
 curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/approval \
   -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "decision": "approve_mock",
-    "approved_by": "Hall",
-    "notes": "Mock synthesis reviewed. Safe to proceed to the next development step."
-  }' | jq .
+  -d '{"decision":"approve_mock","approved_by":"Hall","notes":"Read-only fixture evidence reviewed."}' | jq .
 ```
 
-Read approval:
-
-```bash
-curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/approval \
-  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq .
-```
-
-Then read the summary:
+Confirm summary source modes:
 
 ```bash
 curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/summary \
-  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq .
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq '.evidence_source_modes'
 ```
 
 Verify Agent Bus state:
@@ -312,55 +223,24 @@ Verify Agent Bus state:
 curl -sS http://127.0.0.1:8050/api/v1/mission-control/snapshot | jq .
 ```
 
-Verify Orchestrator state:
-
-```bash
-curl -sS http://127.0.0.1:8055/api/v1/orchestrator/snapshot | jq .
-```
-
 ## Test Plan
 
 ```bash
+pytest tests/test_marketing_readonly_evidence.py
 pytest tests/test_marketing_governance.py
 pytest tests/test_marketing_worker.py
 pytest tests/test_marketing_loop.py
 pytest
 ```
 
-Focused tests use fake Agent Bus clients and verify:
-
-- marketing registry contains the required six agents
-- worker can process one eligible mock specialist item
-- worker refuses unknown agents and unsupported evidence types
-- worker does not process non-marketing work
-- worker does not process live-mode work while live integrations are disabled
-- worker evidence is mock-only and has `live_platform_access=false`
-- run-once endpoint requires admin auth
-- run-once endpoint respects `ENABLE_MARKETING_WORKER_MOCK`
-- governance endpoint requires admin auth
-- governance endpoint respects `ENABLE_MARKETING_GOVERNANCE_MOCK`
-- governance refuses missing specialist evidence
-- `risk_review` references specialist evidence packet IDs
-- `synthesis_memo` references specialist evidence and the review artifact
-- approval POST requires admin auth and `ENABLE_MARKETING_APPROVAL_MOCK`
-- approval refuses missing governance artifacts
-- approval accepts approve, reject, and request-changes decisions
-- approval creates a `human_approval` artifact with no-production-write safeguards
-- summary includes approval state
-- existing mock-loop default behavior remains backward compatible
-
 ## Known Limitations
 
-- This is a mock orchestration proof only; it does not execute specialist agents.
-- The worker adapter and governance runner run only when called directly or through run-once endpoints; neither is a daemon.
-- Reviewer and HQ synthesis artifacts are generated by deterministic mock logic, not live agents.
-- Human approval records only mock decisions and does not authorize production work.
-- The Agent Bus review packet model stores lifecycle review fields; the richer marketing governance review content is attached as a `risk_review` evidence artifact.
-- If the deployed Agent Bus review lifecycle route is unavailable, the canonical review packet id is omitted and the `risk_review` artifact remains the summary source of truth.
-- Mission Control visibility depends on Agent Bus persistence and snapshot support.
-- Orchestrator snapshot remains focused on orchestrator review/workflow state; Agent Bus Mission Control is the canonical view for Agent Bus work items and evidence.
+- Fixture evidence is structured but not live data.
+- Only `hall-data-intelligence -> analytics_snapshot` is supported.
+- The fixture adapter is not a daemon and does not execute real agents.
+- No production action is triggered by fixture evidence, governance, or approval.
 - Repeated mock runs intentionally create additional mock records for MVP visibility.
 
 ## Recommended Next PR
 
-Add the first read-only real data-source evidence adapter behind a strict safe flag, starting with one source and no write capability.
+Add the first real read-only source adapter behind a strict safe flag, starting with one source and no write capability.
