@@ -36,7 +36,8 @@ async def attach_read_only_fixture_evidence(
     metadata = _metadata(work_item)
     _validate_work_item(work_item, requested_workflow_id=payload.workflow_id)
     workflow_id = str(metadata.get("workflow_id") or payload.workflow_id or "") or None
-    derived_metrics = _derived_metrics(payload.fixture.model_dump())
+    fixture = payload.fixture.dict()
+    derived_metrics = _derived_metrics(fixture)
     evidence_payload = {
         "work_item_id": payload.work_item_id,
         "repository": MARKETING_REPOSITORY,
@@ -53,7 +54,7 @@ async def attach_read_only_fixture_evidence(
             "workflow_type": MARKETING_WORKFLOW_TYPE,
             "source_mode": READ_ONLY_FIXTURE_SOURCE_MODE,
             "source_label": "weekly_marketing_snapshot_fixture",
-            "fixture": payload.fixture.model_dump(),
+            "fixture": fixture,
             "derived_metrics": derived_metrics,
             "confidence": "fixture_only",
             "live_platform_access": False,
