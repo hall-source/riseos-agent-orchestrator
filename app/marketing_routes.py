@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from typing import Any
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 
 from app.admin_auth import require_orchestrator_admin_token
 from app.clients.agent_bus import AgentBusAPIError, AgentBusClient, MissingAgentBusBaseUrlError
@@ -11,6 +13,14 @@ from app.marketing_approval import (
     record_marketing_mock_approval,
 )
 from app.marketing_approval_contract import MarketingApprovalRecord, MarketingApprovalRequest
+from app.marketing_evidence_audit import (
+    InMemoryMarketingEvidenceAuditRepository,
+    JsonlMarketingEvidenceAuditRepository,
+    MarketingEvidenceAuditRepository,
+    audit_path_from_settings,
+    build_marketing_evidence_audit_event,
+)
+from app.marketing_evidence_audit_contract import MarketingEvidenceAuditListResponse
 from app.marketing_governance import MarketingGovernanceValidationError, run_marketing_governance_once
 from app.marketing_governance_contract import MarketingGovernanceRunOnceRequest, MarketingGovernanceRunOnceResponse
 from app.marketing_loop import (
@@ -146,33 +156,81 @@ async def attach_marketing_google_sheets_readonly_evidence(
     _: None = Depends(require_orchestrator_admin_token),
     settings: Settings = Depends(get_settings),
 ) -> AttachGoogleSheetsReadOnlyEvidenceResponse:
-    if not settings.enable_marketing_sheets_readonly_evidence:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true is required before attaching Google Sheets read-only evidence.",
-        )
-    client, should_close = _agent_bus_client(request, settings)
-    source_reader = getattr(request.app.state, "marketing_sheets_source_reader", None) or ApprovedGoogleSheetsReadOnlySourceReader(
-        allowed_source_ids=settings.marketing_readonly_allowed_source_ids,
-        credentials_path=settings.google_application_credentials,
-    )
+    audit_repository = _marketing_evidence_audit_repository(request, settings)
+    client: AgentBusClient | None = None
+    should_close = False
     try:
-        return await attach_google_sheets_readonly_evidence(
+        if not settings.enable_marketing_sheets_readonly_evidence:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true is required before attaching Google Sheets read-only evidence.",
+            )
+        client, should_close = _agent_bus_client(request, settings)
+        source_reader = getattr(request.app.state, "marketing_sheets_source_reader", None) or ApprovedGoogleSheetsReadOnlySourceReader(
+            allowed_source_ids=settings.marketing_readonly_allowed_source_ids,
+            credentials_path=settings.google_application_credentials,
+        )
+        response = await attach_google_sheets_readonly_evidence(
             agent_bus_client=client,
             source_reader=source_reader,
             payload=payload,
         )
+        await audit_repository.record_event(
+            build_marketing_evidence_audit_event(
+                payload=payload,
+                settings=settings,
+                status="success",
+                evidence_packet_id=response.evidence_packet_id,
+            )
+        )
+        return response
+    except HTTPException as exc:
+        await _record_failed_evidence_audit(audit_repository, payload, settings, _detail_text(exc.detail))
+        raise
     except MarketingSheetsEvidenceValidationError as exc:
+        await _record_failed_evidence_audit(audit_repository, payload, settings, str(exc))
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MarketingSheetsSourceReadError as exc:
+        await _record_failed_evidence_audit(audit_repository, payload, settings, str(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except MissingAgentBusBaseUrlError as exc:
+        await _record_failed_evidence_audit(audit_repository, payload, settings, str(exc))
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AgentBusAPIError as exc:
+        await _record_failed_evidence_audit(audit_repository, payload, settings, str(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     finally:
-        if should_close:
+        if should_close and client is not None:
             await client.aclose()
+
+
+@router.get(
+    "/evidence/audit",
+    response_model=MarketingEvidenceAuditListResponse,
+)
+async def list_marketing_evidence_audit_events(
+    request: Request,
+    workflow_id: str | None = None,
+    source_mode: str | None = None,
+    event_status: str | None = Query(default=None, alias="status"),
+    limit: int = 100,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> MarketingEvidenceAuditListResponse:
+    if not settings.enable_marketing_evidence_audit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_MARKETING_EVIDENCE_AUDIT=false disables the marketing evidence audit read endpoint.",
+        )
+    repository = _marketing_evidence_audit_repository(request, settings)
+    return MarketingEvidenceAuditListResponse(
+        events=await repository.list_events(
+            workflow_id=workflow_id,
+            source_mode=source_mode,
+            status=event_status,
+            limit=limit,
+        )
+    )
 
 
 @router.post(
@@ -326,6 +384,39 @@ def _agent_bus_client(request: Request, settings: Settings) -> tuple[AgentBusCli
         ),
         True,
     )
+
+
+def _marketing_evidence_audit_repository(request: Request, settings: Settings) -> MarketingEvidenceAuditRepository:
+    repository = getattr(request.app.state, "marketing_evidence_audit_repository", None)
+    if repository is not None:
+        return repository
+    audit_path = audit_path_from_settings(settings)
+    if audit_path:
+        repository = JsonlMarketingEvidenceAuditRepository(audit_path)
+    else:
+        repository = InMemoryMarketingEvidenceAuditRepository()
+    request.app.state.marketing_evidence_audit_repository = repository
+    return repository
+
+
+async def _record_failed_evidence_audit(
+    repository: MarketingEvidenceAuditRepository,
+    payload: AttachGoogleSheetsReadOnlyEvidenceRequest,
+    settings: Settings,
+    failure_reason: str,
+) -> None:
+    await repository.record_event(
+        build_marketing_evidence_audit_event(
+            payload=payload,
+            settings=settings,
+            status="failed",
+            failure_reason=failure_reason,
+        )
+    )
+
+
+def _detail_text(detail: Any) -> str:
+    return detail if isinstance(detail, str) else str(detail)
 
 
 def _with_governance_next_action(summary: MarketingWorkflowSummary) -> MarketingWorkflowSummary:
