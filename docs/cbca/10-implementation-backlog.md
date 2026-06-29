@@ -80,6 +80,18 @@
 | Keep summary source-mode counts generic | `riseos-agent-orchestrator` | Counts `google_sheets_readonly` and `drive_csv_readonly` when present |
 | Add Sheets adapter tests | `riseos-agent-orchestrator` | Auth, flag, mapping, source errors, metrics, safeguards, summary counts |
 
+## Priority 1F: Approved Google Sheets Read-Only Source Reader
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add source ID allowlist config | `riseos-agent-orchestrator` | `MARKETING_READONLY_ALLOWED_SOURCE_IDS` comma-separated list |
+| Add service-account credential path config | `riseos-agent-orchestrator` | Uses deployment-provided `GOOGLE_APPLICATION_CREDENTIALS` |
+| Wire approved Google Sheets reader | `riseos-agent-orchestrator` | Reads only explicit allowlisted Sheet IDs and explicit tab names |
+| Use read-only Sheets scope | `riseos-agent-orchestrator` | `https://www.googleapis.com/auth/spreadsheets.readonly` only |
+| Fail closed on unsafe reads | `riseos-agent-orchestrator` | Missing credentials, allowlist, sheet, columns, date rows, or Google read failure |
+| Preserve evidence contract | `riseos-agent-orchestrator` | Emits `source_mode=google_sheets_readonly`, no-write safeguards, and planning-only confidence |
+| Add approved-reader tests | `riseos-agent-orchestrator` | Allowlist, credentials, schema, filtering, metrics, no write methods |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
