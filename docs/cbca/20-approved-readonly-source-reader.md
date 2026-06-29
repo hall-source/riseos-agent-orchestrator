@@ -11,6 +11,7 @@ one allowlisted Google Sheet
 -> one explicit tab
 -> one weekly marketing snapshot schema
 -> hall-data-intelligence analytics_snapshot evidence
+-> durable audit event for every attempt
 ```
 
 It does not create a broad Google connector, Drive crawler, file search tool, or write-capable integration.
@@ -25,6 +26,12 @@ POST /api/v1/marketing/evidence/google-sheets-readonly/attach
 
 The endpoint remains admin-protected and feature-flagged.
 
+Audit events can be read through:
+
+```http
+GET /api/v1/marketing/evidence/audit
+```
+
 ## Required Environment
 
 ```bash
@@ -32,6 +39,14 @@ ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true
 MARKETING_READONLY_ALLOWED_SOURCE_IDS=approved_google_sheet_id
 GOOGLE_APPLICATION_CREDENTIALS=/secure/path/to/service-account.json
 ```
+
+Optional audit read endpoint flag:
+
+```bash
+ENABLE_MARKETING_EVIDENCE_AUDIT=true
+```
+
+Audit writes remain on for the Google Sheets endpoint regardless of this flag.
 
 `MARKETING_READONLY_ALLOWED_SOURCE_IDS` is a comma-separated list. Only source IDs in that list are accepted.
 
@@ -94,6 +109,8 @@ The reader fails closed when:
 - no rows match `date_range_label`
 - numeric metric fields are invalid or negative
 
+Failed attempts are recorded as failed audit events. Audit records store the source ID hash and last six characters, not the full source ID.
+
 ## Evidence Output
 
 The evidence packet uses:
@@ -113,9 +130,32 @@ The evidence packet uses:
 
 The packet also includes normalized metrics, source breakdown, and `deal_created_rate_from_leads`.
 
+## Audit Output
+
+Each attach attempt creates an audit record with:
+
+```json
+{
+  "event_type": "marketing_readonly_evidence_attach_attempt",
+  "workflow_id": "...",
+  "work_item_id": "...",
+  "agent_id": "hall-data-intelligence",
+  "source_mode": "google_sheets_readonly",
+  "source_id_hash": "...",
+  "source_id_last_6": "abc123",
+  "allowlist_passed": true,
+  "credentials_present": true,
+  "status": "success",
+  "write_access": false,
+  "live_platform_access": false
+}
+```
+
+Audit records do not store credentials, credential paths, Authorization headers, admin tokens, or full source IDs.
+
 ## Safety Guarantees
 
-This reader does not:
+This reader and audit layer do not:
 
 - write to Google Sheets
 - create, edit, delete, or search Drive files
@@ -154,6 +194,13 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/evidence/google-sheets-r
     "sheet_name": "Weekly Marketing Snapshot",
     "date_range_label": "last_7_days"
   }' | jq .
+```
+
+Read audit events:
+
+```bash
+curl -sS "http://127.0.0.1:8055/api/v1/marketing/evidence/audit?workflow_id=$WORKFLOW_ID" \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq .
 ```
 
 Run remaining mock workers:
@@ -217,3 +264,4 @@ Confirm:
 - OpenAI calls
 - ChatGPT agent calls
 - production marketing actions
+- summary-level audit counts
