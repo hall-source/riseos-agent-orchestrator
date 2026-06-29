@@ -20,7 +20,7 @@ class AttachGoogleSheetsReadOnlyEvidenceRequest(BaseModel):
     agent_id: str = "hall-data-intelligence"
     work_item_id: str = Field(min_length=1)
     source_type: SourceType = "google_sheet"
-    source_id: str = Field(min_length=1)
+    source_id: str = ""
     sheet_name: str | None = None
     date_range_label: str = Field(min_length=1)
     mapping: MarketingSheetsFieldMapping = Field(default_factory=MarketingSheetsFieldMapping)
