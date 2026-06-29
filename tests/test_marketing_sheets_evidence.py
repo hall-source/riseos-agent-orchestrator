@@ -195,7 +195,7 @@ def client_with_fake_agent_bus(
 
 def teardown_function() -> None:
     app.dependency_overrides.clear()
-    for attr in {"agent_bus_client", "marketing_sheets_source_reader"}:
+    for attr in {"agent_bus_client", "marketing_sheets_source_reader", "marketing_evidence_audit_repository"}:
         if hasattr(app.state, attr):
             delattr(app.state, attr)
     get_settings.cache_clear()
@@ -245,7 +245,7 @@ def test_sheets_reader_fails_closed_when_credentials_are_missing() -> None:
 def test_sheets_endpoint_rejects_missing_source_id() -> None:
     item = marketing_work_item()
     fake = FakeSheetsEvidenceAgentBusClient([item])
-    client = client_with_fake_agent_bus(fake, enable_sheets=True, reader=StaticSheetsReader())
+    client = client_with_fake_agent_bus(fake, enable_sheets=True)
     payload = request_payload(str(item["work_item_id"]))
     payload["source_id"] = ""
 
@@ -255,7 +255,8 @@ def test_sheets_endpoint_rejects_missing_source_id() -> None:
         json=payload,
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 409
+    assert "source_id is required" in response.json()["detail"]
 
 
 def test_sheets_reader_rejects_missing_sheet_name() -> None:

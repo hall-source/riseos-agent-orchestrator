@@ -92,6 +92,18 @@
 | Preserve evidence contract | `riseos-agent-orchestrator` | Emits `source_mode=google_sheets_readonly`, no-write safeguards, and planning-only confidence |
 | Add approved-reader tests | `riseos-agent-orchestrator` | Allowlist, credentials, schema, filtering, metrics, no write methods |
 
+## Priority 1G: Read-Only Evidence Audit Logging
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add marketing evidence audit contract | `riseos-agent-orchestrator` | Records sanitized attach-attempt events |
+| Add durable JSONL audit repository | `riseos-agent-orchestrator` | Uses `ORCHESTRATOR_DB_PATH` sibling JSONL when configured |
+| Audit Google Sheets attach attempts | `riseos-agent-orchestrator` | Success and failure events for the read-only evidence endpoint |
+| Add admin-protected audit read endpoint | `riseos-agent-orchestrator` | `GET /api/v1/marketing/evidence/audit` with filters |
+| Redact source and secret material | `riseos-agent-orchestrator` | Stores source hash and last six only; no credentials or auth headers |
+| Add audit tests | `riseos-agent-orchestrator` | Success, failures, redaction, auth, filters, no-write fields |
+| Defer summary audit counts | `riseos-agent-orchestrator` | Use audit endpoint first; add summary counts later if needed |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
