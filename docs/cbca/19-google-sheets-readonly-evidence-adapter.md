@@ -26,6 +26,8 @@ The endpoint is admin-protected and disabled unless:
 ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true
 ```
 
+Every Google Sheets attach attempt is audited by the read-only evidence audit logger. See `docs/cbca/21-readonly-evidence-audit-logging.md`.
+
 ## Connector Status
 
 The adapter interface is wired to an approved Google Sheets read-only source reader by default.
@@ -54,6 +56,14 @@ ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true
 MARKETING_READONLY_ALLOWED_SOURCE_IDS=approved_google_sheet_id
 GOOGLE_APPLICATION_CREDENTIALS=/secure/path/to/service-account.json
 ```
+
+Optional audit read endpoint flag:
+
+```bash
+ENABLE_MARKETING_EVIDENCE_AUDIT=true
+```
+
+Audit writes remain on for this endpoint even if the audit read endpoint is disabled.
 
 `MARKETING_READONLY_ALLOWED_SOURCE_IDS` is a comma-separated allowlist. The endpoint rejects any source ID that is not present in that list.
 
@@ -156,6 +166,8 @@ The approved reader fails closed when:
 - no rows match `date_range_label`
 - Google Sheets returns an error or invalid response
 
+All of these failed attempts are recorded as failed audit events without storing the full source ID, credentials, or Authorization headers.
+
 ## Evidence Packet
 
 For Google Sheets, the evidence packet includes:
@@ -214,6 +226,8 @@ The workflow summary counts source modes from evidence packets. After this adapt
 }
 ```
 
+Audit counts are not yet included in workflow summary. Use the audit endpoint for read attempt history.
+
 ## Safety Guarantees
 
 This adapter does not:
@@ -224,14 +238,12 @@ This adapter does not:
 - modify Sheets
 - authorize real business decisions
 
-Every evidence packet includes:
+Every evidence packet and audit event includes:
 
 ```json
 {
   "live_platform_access": false,
-  "write_access": false,
-  "not_for_real_marketing_decisions": true,
-  "approval_required": false
+  "write_access": false
 }
 ```
 
@@ -266,6 +278,13 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/evidence/google-sheets-r
     "sheet_name": "Weekly Marketing Snapshot",
     "date_range_label": "last_7_days"
   }' | jq .
+```
+
+Read audit events:
+
+```bash
+curl -sS "http://127.0.0.1:8055/api/v1/marketing/evidence/audit?workflow_id=$WORKFLOW_ID" \
+  -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq .
 ```
 
 Run remaining mock workers:
@@ -307,7 +326,8 @@ curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/summary \
 Before this path expands beyond one approved source, the system still needs:
 
 - deployment configuration for the approved source ID and service account file
-- audit review of the exact service account permissions
+- live validation against one approved source after audit logging is deployed
 - timeout, retry, and rate-limit tuning after first runtime validation
+- summary audit counts, if useful for Mission Control
 - a separate PR for any Drive CSV reader
 - a separate approval gate before any real marketing decision can use the evidence
