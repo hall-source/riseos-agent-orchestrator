@@ -11,6 +11,7 @@ from app.config import Settings, get_settings
 from app.main import app
 from app.marketing_loop import MARKETING_REPOSITORY, MARKETING_WORKFLOW_TYPE, REVIEW_AGENT
 from app.marketing_sheets_evidence_adapter import (
+    ApprovedGoogleSheetsReadOnlySourceReader,
     MarketingSheetsEvidenceValidationError,
     MarketingSheetsSourceReadError,
     attach_google_sheets_readonly_evidence,
@@ -98,6 +99,20 @@ class StaticSheetsReader:
         return self.rows
 
 
+class FakeApprovedSheetsReader(ApprovedGoogleSheetsReadOnlySourceReader):
+    def __init__(self, values: list[list[object]], *, allowed_source_ids: tuple[str, ...] = ("SAFE_TEST_SOURCE_ID",)) -> None:
+        super().__init__(allowed_source_ids=allowed_source_ids, credentials_path="/secure/test-service-account.json")
+        self.values = values
+        self.reads: list[str] = []
+
+    def _access_token(self) -> str:
+        return "test-readonly-token"
+
+    async def _read_sheet_values(self, payload: AttachGoogleSheetsReadOnlyEvidenceRequest, token: str) -> list[list[object]]:
+        self.reads.append(payload.source_id)
+        return self.values
+
+
 def marketing_work_item(
     *,
     agent_id: str = "hall-data-intelligence",
@@ -145,11 +160,23 @@ def request_payload(work_item_id: str, *, workflow_id: str = "marketing-wf-sheet
     }
 
 
+def approved_sheet_values() -> list[list[object]]:
+    return [
+        ["date_range_label", "source", "leads", "contacts_created", "deals_created", "sessions"],
+        ["last_7_days", "paid_search", 18, 16, 3, 450],
+        ["last_7_days", "organic_search", 14, 12, 2, 500],
+        ["last_7_days", "direct", 10, 10, 1, 250],
+        ["previous_7_days", "paid_search", 999, 999, 999, 999],
+    ]
+
+
 def client_with_fake_agent_bus(
     fake_client: FakeSheetsEvidenceAgentBusClient,
     *,
     enable_sheets: bool,
-    reader: StaticSheetsReader | None = None,
+    reader: StaticSheetsReader | ApprovedGoogleSheetsReadOnlySourceReader | None = None,
+    allowed_source_ids: tuple[str, ...] = (),
+    google_application_credentials: str | None = None,
 ) -> TestClient:
     get_settings.cache_clear()
     app.dependency_overrides[get_settings] = lambda: Settings(
@@ -157,6 +184,8 @@ def client_with_fake_agent_bus(
         orchestrator_admin_token="admin-token",
         agent_bus_base_url="http://127.0.0.1:8050",
         enable_marketing_sheets_readonly_evidence=enable_sheets,
+        marketing_readonly_allowed_source_ids=allowed_source_ids,
+        google_application_credentials=google_application_credentials,
     )
     app.state.agent_bus_client = fake_client
     if reader is not None:
@@ -195,6 +224,83 @@ def test_sheets_endpoint_respects_feature_flag() -> None:
 
     assert response.status_code == 403
     assert "ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE" in response.json()["detail"]
+
+
+def test_sheets_reader_enforces_source_id_allowlist() -> None:
+    payload = AttachGoogleSheetsReadOnlyEvidenceRequest(**request_payload("wi-test"))
+    reader = ApprovedGoogleSheetsReadOnlySourceReader(allowed_source_ids=("DIFFERENT_SOURCE",), credentials_path="/secure/test.json")
+
+    with pytest.raises(MarketingSheetsEvidenceValidationError, match="not allowlisted"):
+        asyncio.run(reader.read_rows(payload))
+
+
+def test_sheets_reader_fails_closed_when_credentials_are_missing() -> None:
+    payload = AttachGoogleSheetsReadOnlyEvidenceRequest(**request_payload("wi-test"))
+    reader = ApprovedGoogleSheetsReadOnlySourceReader(allowed_source_ids=("SAFE_TEST_SOURCE_ID",), credentials_path=None)
+
+    with pytest.raises(MarketingSheetsSourceReadError, match="GOOGLE_APPLICATION_CREDENTIALS"):
+        asyncio.run(reader.read_rows(payload))
+
+
+def test_sheets_endpoint_rejects_missing_source_id() -> None:
+    item = marketing_work_item()
+    fake = FakeSheetsEvidenceAgentBusClient([item])
+    client = client_with_fake_agent_bus(fake, enable_sheets=True, reader=StaticSheetsReader())
+    payload = request_payload(str(item["work_item_id"]))
+    payload["source_id"] = ""
+
+    response = client.post(
+        "/api/v1/marketing/evidence/google-sheets-readonly/attach",
+        headers={"Authorization": "Bearer admin-token"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_sheets_reader_rejects_missing_sheet_name() -> None:
+    payload_data = request_payload("wi-test")
+    payload_data["sheet_name"] = None
+    payload = AttachGoogleSheetsReadOnlyEvidenceRequest(**payload_data)
+    reader = ApprovedGoogleSheetsReadOnlySourceReader(allowed_source_ids=("SAFE_TEST_SOURCE_ID",), credentials_path="/secure/test.json")
+
+    with pytest.raises(MarketingSheetsEvidenceValidationError, match="sheet_name"):
+        asyncio.run(reader.read_rows(payload))
+
+
+def test_sheets_reader_rejects_missing_expected_columns() -> None:
+    item = marketing_work_item()
+    fake = FakeSheetsEvidenceAgentBusClient([item])
+    reader = FakeApprovedSheetsReader([
+        ["date_range_label", "source", "leads", "contacts_created", "sessions"],
+        ["last_7_days", "paid_search", 18, 16, 450],
+    ])
+
+    with pytest.raises(MarketingSheetsSourceReadError, match="missing expected columns"):
+        asyncio.run(
+            attach_google_sheets_readonly_evidence(
+                agent_bus_client=fake,
+                source_reader=reader,
+                payload=AttachGoogleSheetsReadOnlyEvidenceRequest(**request_payload(str(item["work_item_id"]))),
+            )
+        )
+
+
+def test_sheets_reader_rejects_when_date_range_has_no_matching_rows() -> None:
+    item = marketing_work_item()
+    fake = FakeSheetsEvidenceAgentBusClient([item])
+    reader = FakeApprovedSheetsReader(approved_sheet_values())
+    payload_data = request_payload(str(item["work_item_id"]))
+    payload_data["date_range_label"] = "missing_range"
+
+    with pytest.raises(MarketingSheetsSourceReadError, match="No rows matched date_range_label"):
+        asyncio.run(
+            attach_google_sheets_readonly_evidence(
+                agent_bus_client=fake,
+                source_reader=reader,
+                payload=AttachGoogleSheetsReadOnlyEvidenceRequest(**payload_data),
+            )
+        )
 
 
 def test_sheets_adapter_rejects_unsupported_agent() -> None:
@@ -284,6 +390,31 @@ def test_sheets_derived_metric_calculation_works() -> None:
     assert response.metrics["deal_created_rate_from_leads"] == 0.1429
 
 
+def test_approved_sheets_reader_filters_date_range_and_builds_source_breakdown() -> None:
+    item = marketing_work_item()
+    fake = FakeSheetsEvidenceAgentBusClient([item])
+    reader = FakeApprovedSheetsReader(approved_sheet_values())
+
+    response = asyncio.run(
+        attach_google_sheets_readonly_evidence(
+            agent_bus_client=fake,
+            source_reader=reader,
+            payload=AttachGoogleSheetsReadOnlyEvidenceRequest(**request_payload(str(item["work_item_id"]))),
+        )
+    )
+
+    assert response.metrics == {
+        "leads": 42,
+        "contacts_created": 38,
+        "deals_created": 6,
+        "sessions": 1200,
+        "deal_created_rate_from_leads": 0.1429,
+    }
+    assert {row["source"] for row in response.source_breakdown} == {"direct", "organic_search", "paid_search"}
+    assert all(row["leads"] != 999 for row in response.source_breakdown)
+    assert reader.reads == ["SAFE_TEST_SOURCE_ID"]
+
+
 def test_sheets_source_read_errors_return_clear_endpoint_response() -> None:
     item = marketing_work_item()
     fake = FakeSheetsEvidenceAgentBusClient([item])
@@ -299,7 +430,7 @@ def test_sheets_source_read_errors_return_clear_endpoint_response() -> None:
     assert "Unable to read configured test source" in response.json()["detail"]
 
 
-def test_sheets_endpoint_reports_connector_gap_when_reader_is_unconfigured() -> None:
+def test_sheets_endpoint_uses_approved_reader_and_requires_allowlist() -> None:
     item = marketing_work_item()
     fake = FakeSheetsEvidenceAgentBusClient([item])
     client = client_with_fake_agent_bus(fake, enable_sheets=True)
@@ -310,8 +441,28 @@ def test_sheets_endpoint_reports_connector_gap_when_reader_is_unconfigured() -> 
         json=request_payload(str(item["work_item_id"])),
     )
 
+    assert response.status_code == 409
+    assert "MARKETING_READONLY_ALLOWED_SOURCE_IDS" in response.json()["detail"]
+
+
+def test_sheets_endpoint_uses_approved_reader_and_requires_credentials_after_allowlist() -> None:
+    item = marketing_work_item()
+    fake = FakeSheetsEvidenceAgentBusClient([item])
+    client = client_with_fake_agent_bus(
+        fake,
+        enable_sheets=True,
+        allowed_source_ids=("SAFE_TEST_SOURCE_ID",),
+        google_application_credentials=None,
+    )
+
+    response = client.post(
+        "/api/v1/marketing/evidence/google-sheets-readonly/attach",
+        headers={"Authorization": "Bearer admin-token"},
+        json=request_payload(str(item["work_item_id"])),
+    )
+
     assert response.status_code == 502
-    assert "No Google Sheets or Drive CSV read-only source reader is configured" in response.json()["detail"]
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in response.json()["detail"]
 
 
 def test_summary_includes_google_sheets_readonly_source_mode() -> None:
@@ -344,7 +495,7 @@ def test_summary_includes_google_sheets_readonly_source_mode() -> None:
 def test_sheets_adapter_does_not_call_write_methods() -> None:
     item = marketing_work_item()
     fake = FakeSheetsEvidenceAgentBusClient([item])
-    reader = StaticSheetsReader()
+    reader = FakeApprovedSheetsReader(approved_sheet_values())
 
     asyncio.run(
         attach_google_sheets_readonly_evidence(
@@ -355,4 +506,5 @@ def test_sheets_adapter_does_not_call_write_methods() -> None:
     )
 
     assert fake.external_writes == []
-    assert reader.writes == []
+    assert not hasattr(reader, "write_rows")
+    assert not hasattr(reader, "write_sheet_values")
