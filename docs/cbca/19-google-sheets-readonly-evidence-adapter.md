@@ -28,15 +28,46 @@ ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true
 
 ## Connector Status
 
-This PR adds the adapter interface and safe local test double. It does not wire live Google Sheets or Drive credentials in this repo.
+The adapter interface is wired to an approved Google Sheets read-only source reader by default.
 
-If no source reader is configured on the app, the endpoint fails closed with:
+The default reader is intentionally narrow:
+
+- supports only `source_type=google_sheet`
+- reads only the requested `source_id`
+- requires the source ID to be allowlisted
+- requires an explicit sheet/tab name
+- uses Google Sheets read-only scope
+- never creates, edits, deletes, or writes Sheets or Drive files
+
+Tests can still inject an in-memory source reader at:
 
 ```text
-No Google Sheets or Drive CSV read-only source reader is configured for this environment.
+app.state.marketing_sheets_source_reader
 ```
 
-That is intentional. The PR should not pretend live Google Sheets access exists when the connector is not installed.
+That keeps the endpoint testable without live Google access.
+
+## Required Environment
+
+```bash
+ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true
+MARKETING_READONLY_ALLOWED_SOURCE_IDS=approved_google_sheet_id
+GOOGLE_APPLICATION_CREDENTIALS=/secure/path/to/service-account.json
+```
+
+`MARKETING_READONLY_ALLOWED_SOURCE_IDS` is a comma-separated allowlist. The endpoint rejects any source ID that is not present in that list.
+
+`GOOGLE_APPLICATION_CREDENTIALS` must point to a deployment-provided service account JSON file. Do not commit credentials and do not log credential contents.
+
+## Required Google Permission
+
+The reader requests only:
+
+```text
+https://www.googleapis.com/auth/spreadsheets.readonly
+```
+
+Do not grant write scopes. Do not grant broad Drive scopes for this path.
 
 ## Supported Mapping
 
@@ -47,6 +78,33 @@ hall-data-intelligence -> analytics_snapshot
 ```
 
 The adapter refuses PPC, SEO, creative, HubSpot, Google Ads, GA4, Search Console, Slack, Monday, OpenAI, and ChatGPT agent paths.
+
+## Approved Sheet Schema
+
+The first approved Google Sheet tab is expected to be named:
+
+```text
+Weekly Marketing Snapshot
+```
+
+Expected columns:
+
+```text
+date_range_label
+source
+leads
+contacts_created
+deals_created
+sessions
+```
+
+Example rows:
+
+```text
+last_7_days | paid_search    | 18 | 16 | 3 | 450
+last_7_days | organic_search | 14 | 12 | 2 | 500
+last_7_days | direct         | 10 | 10 | 1 | 250
+```
 
 ## Request Shape
 
@@ -69,14 +127,7 @@ The adapter refuses PPC, SEO, creative, HubSpot, Google Ads, GA4, Search Console
 }
 ```
 
-`source_type` may be:
-
-```text
-google_sheet
-drive_csv
-```
-
-`drive_csv` uses the same row normalization path and emits `source_mode=drive_csv_readonly`.
+The request model still accepts `drive_csv` for the interface contract, but the default approved reader added after the interface PR only supports `google_sheet`. A Drive CSV reader would need a separate, explicit implementation and review.
 
 ## Source Reader Interface
 
@@ -86,13 +137,24 @@ The adapter depends on a read-only row reader interface:
 MarketingReadOnlyTabularSourceReader.read_rows(payload) -> list[dict]
 ```
 
-The endpoint looks for a configured reader at:
+The production default is `ApprovedGoogleSheetsReadOnlySourceReader`. Tests may inject an alternate reader at:
 
 ```text
 app.state.marketing_sheets_source_reader
 ```
 
-Tests provide a local in-memory reader. A future PR can replace that with an actual Google Sheets or Drive CSV reader without changing the evidence contract.
+## Failure Behavior
+
+The approved reader fails closed when:
+
+- credentials are missing
+- credentials cannot be refreshed
+- source ID is missing
+- source ID is not allowlisted
+- sheet name is missing
+- expected columns are missing
+- no rows match `date_range_label`
+- Google Sheets returns an error or invalid response
 
 ## Evidence Packet
 
@@ -124,22 +186,23 @@ For Google Sheets, the evidence packet includes:
 }
 ```
 
-`mode=mock_only` keeps the existing mock governance safety check intact. `source_mode=google_sheets_readonly` or `drive_csv_readonly` is the summary-visible source classification.
+`mode=mock_only` keeps the existing mock governance safety check intact. `source_mode=google_sheets_readonly` is the summary-visible source classification.
 
 ## Normalization
 
 The adapter:
 
 - reads rows through the configured read-only source reader
+- filters rows by `date_range_label`
 - maps configured columns into `leads`, `contacts_created`, `deals_created`, `sessions`, and `source`
-- totals numeric metrics across rows
+- totals numeric metrics across matching rows
 - calculates `deal_created_rate_from_leads`
 - groups rows into `source_breakdown`
 - rejects invalid or negative numeric values
 
 ## Summary Behavior
 
-The workflow summary already counts source modes from evidence packets. After this adapter attaches evidence, summary can show:
+The workflow summary counts source modes from evidence packets. After this adapter attaches evidence, summary can show:
 
 ```json
 {
@@ -199,7 +262,7 @@ curl -sS -X POST http://127.0.0.1:8055/api/v1/marketing/evidence/google-sheets-r
     "agent_id": "hall-data-intelligence",
     "work_item_id": "'$DATA_WORK_ITEM_ID'",
     "source_type": "google_sheet",
-    "source_id": "SAFE_TEST_SOURCE_ID",
+    "source_id": "'$MARKETING_TEST_SHEET_ID'",
     "sheet_name": "Weekly Marketing Snapshot",
     "date_range_label": "last_7_days"
   }' | jq .
@@ -239,13 +302,12 @@ curl -sS http://127.0.0.1:8055/api/v1/marketing/workflows/$WORKFLOW_ID/summary \
   -H "Authorization: Bearer $ORCHESTRATOR_ADMIN_TOKEN" | jq .
 ```
 
-## Remaining Before Live Connector Use
+## Remaining Before Broader Live Connector Use
 
-Before live Google Sheets or Drive CSV reads can run outside tests, the system still needs:
+Before this path expands beyond one approved source, the system still needs:
 
-- a configured read-only Google/Drive source reader
-- credential handling with read-only scopes only
-- source allowlist or safe source registry
-- audit logging for each read
-- timeout, retry, and rate-limit behavior
-- tests proving no write scopes or write methods are used
+- deployment configuration for the approved source ID and service account file
+- audit review of the exact service account permissions
+- timeout, retry, and rate-limit tuning after first runtime validation
+- a separate PR for any Drive CSV reader
+- a separate approval gate before any real marketing decision can use the evidence
