@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from typing import Any, Protocol
+from urllib.parse import quote
+
+import httpx
 
 from app.marketing_loop import MARKETING_REPOSITORY, MARKETING_WORKFLOW_TYPE, REVIEW_AGENT
 from app.marketing_sheets_evidence_contract import (
@@ -12,6 +17,16 @@ HALL_DATA_AGENT = "hall-data-intelligence"
 ANALYTICS_EVIDENCE_TYPE = "analytics_snapshot"
 GOOGLE_SHEETS_SOURCE_MODE = "google_sheets_readonly"
 DRIVE_CSV_SOURCE_MODE = "drive_csv_readonly"
+GOOGLE_SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+GOOGLE_SHEETS_VALUES_BASE_URL = "https://sheets.googleapis.com/v4/spreadsheets"
+REQUIRED_SHEETS_COLUMNS = {
+    "date_range_label",
+    "source",
+    "leads",
+    "contacts_created",
+    "deals_created",
+    "sessions",
+}
 
 
 class MarketingSheetsEvidenceError(Exception):
@@ -41,6 +56,81 @@ class UnconfiguredMarketingSheetsReader:
         raise MarketingSheetsSourceReadError(
             "No Google Sheets or Drive CSV read-only source reader is configured for this environment."
         )
+
+
+class ApprovedGoogleSheetsReadOnlySourceReader:
+    def __init__(
+        self,
+        *,
+        allowed_source_ids: tuple[str, ...] | list[str] | set[str],
+        credentials_path: str | None,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.allowed_source_ids = {source_id.strip() for source_id in allowed_source_ids if source_id.strip()}
+        self.credentials_path = credentials_path
+        self.timeout_seconds = timeout_seconds
+
+    async def read_rows(self, payload: AttachGoogleSheetsReadOnlyEvidenceRequest) -> list[dict[str, Any]]:
+        self._validate_request(payload)
+        token = await asyncio.to_thread(self._access_token)
+        values = await self._read_sheet_values(payload, token)
+        return _rows_from_sheet_values(values, payload)
+
+    def _validate_request(self, payload: AttachGoogleSheetsReadOnlyEvidenceRequest) -> None:
+        if payload.source_type != "google_sheet":
+            raise MarketingSheetsEvidenceValidationError("The approved read-only source reader only supports source_type=google_sheet.")
+        if not payload.source_id.strip():
+            raise MarketingSheetsEvidenceValidationError("source_id is required for Google Sheets read-only evidence.")
+        if not self.allowed_source_ids:
+            raise MarketingSheetsEvidenceValidationError("MARKETING_READONLY_ALLOWED_SOURCE_IDS must include the approved Google Sheet ID.")
+        if payload.source_id not in self.allowed_source_ids:
+            raise MarketingSheetsEvidenceValidationError("Requested Google Sheet source_id is not allowlisted for read-only evidence.")
+        if not payload.sheet_name or not payload.sheet_name.strip():
+            raise MarketingSheetsEvidenceValidationError("sheet_name is required for Google Sheets read-only evidence.")
+
+    def _access_token(self) -> str:
+        if not self.credentials_path:
+            raise MarketingSheetsSourceReadError("GOOGLE_APPLICATION_CREDENTIALS is required for Google Sheets read-only evidence.")
+        if not os.path.isfile(self.credentials_path):
+            raise MarketingSheetsSourceReadError("GOOGLE_APPLICATION_CREDENTIALS must point to a readable service account file.")
+        try:
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+            from google.oauth2 import service_account
+        except ImportError as exc:
+            raise MarketingSheetsSourceReadError("google-auth[requests] is required for Google Sheets read-only evidence.") from exc
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                self.credentials_path,
+                scopes=[GOOGLE_SHEETS_READONLY_SCOPE],
+            )
+            credentials.refresh(GoogleAuthRequest())
+        except Exception as exc:
+            raise MarketingSheetsSourceReadError("Unable to load or refresh Google Sheets read-only credentials.") from exc
+        if not credentials.token:
+            raise MarketingSheetsSourceReadError("Google Sheets read-only credentials did not return an access token.")
+        return str(credentials.token)
+
+    async def _read_sheet_values(self, payload: AttachGoogleSheetsReadOnlyEvidenceRequest, token: str) -> list[list[Any]]:
+        range_name = quote(f"{payload.sheet_name}!A:Z", safe="")
+        source_id = quote(payload.source_id, safe="")
+        url = f"{GOOGLE_SHEETS_VALUES_BASE_URL}/{source_id}/values/{range_name}"
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"majorDimension": "ROWS"}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.get(url, headers=headers, params=params)
+        except httpx.HTTPError as exc:
+            raise MarketingSheetsSourceReadError("Google Sheets read failed for the approved read-only source.") from exc
+        if response.status_code >= 400:
+            raise MarketingSheetsSourceReadError("Google Sheets read failed for the approved read-only source.")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise MarketingSheetsSourceReadError("Google Sheets read returned an invalid response body.") from exc
+        values = body.get("values")
+        if not isinstance(values, list):
+            raise MarketingSheetsSourceReadError("Google Sheets read returned no tabular values.")
+        return values
 
 
 async def attach_google_sheets_readonly_evidence(
@@ -116,7 +206,7 @@ async def _read_rows(
 ) -> list[dict[str, Any]]:
     try:
         rows = await source_reader.read_rows(payload)
-    except MarketingSheetsSourceReadError:
+    except (MarketingSheetsEvidenceValidationError, MarketingSheetsSourceReadError):
         raise
     except Exception as exc:
         raise MarketingSheetsSourceReadError(f"Unable to read marketing source {payload.source_id}: {exc}") from exc
@@ -181,6 +271,36 @@ def _normalize_rows(
         "deal_created_rate_from_leads": _rate(float(totals["deals_created"]), float(totals["leads"])),
     }
     return metrics, sorted(source_breakdown.values(), key=lambda item: str(item["source"]))
+
+
+def _rows_from_sheet_values(values: list[list[Any]], payload: AttachGoogleSheetsReadOnlyEvidenceRequest) -> list[dict[str, Any]]:
+    if len(values) < 2:
+        raise MarketingSheetsSourceReadError("Google Sheets source must include a header row and at least one data row.")
+    headers = [str(value).strip() for value in values[0]]
+    required_columns = _required_columns(payload)
+    missing = sorted(column for column in required_columns if column not in headers)
+    if missing:
+        raise MarketingSheetsSourceReadError(f"Google Sheets source is missing expected columns: {', '.join(missing)}.")
+    rows: list[dict[str, Any]] = []
+    for value_row in values[1:]:
+        row = {header: value_row[index] if index < len(value_row) else "" for index, header in enumerate(headers)}
+        if str(row.get("date_range_label") or "").strip() == payload.date_range_label:
+            rows.append(row)
+    if not rows:
+        raise MarketingSheetsSourceReadError(f"No rows matched date_range_label={payload.date_range_label}.")
+    return rows
+
+
+def _required_columns(payload: AttachGoogleSheetsReadOnlyEvidenceRequest) -> set[str]:
+    mapping = payload.mapping
+    return {
+        "date_range_label",
+        mapping.source,
+        mapping.leads,
+        mapping.contacts_created,
+        mapping.deals_created,
+        mapping.sessions,
+    }
 
 
 def _int_value(row: dict[str, Any], key: str) -> int:
