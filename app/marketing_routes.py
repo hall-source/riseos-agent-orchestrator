@@ -27,9 +27,9 @@ from app.marketing_readonly_evidence_contract import (
     AttachReadOnlyFixtureEvidenceResponse,
 )
 from app.marketing_sheets_evidence_adapter import (
+    ApprovedGoogleSheetsReadOnlySourceReader,
     MarketingSheetsEvidenceValidationError,
     MarketingSheetsSourceReadError,
-    UnconfiguredMarketingSheetsReader,
     attach_google_sheets_readonly_evidence,
 )
 from app.marketing_sheets_evidence_contract import (
@@ -152,7 +152,10 @@ async def attach_marketing_google_sheets_readonly_evidence(
             detail="ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE=true is required before attaching Google Sheets read-only evidence.",
         )
     client, should_close = _agent_bus_client(request, settings)
-    source_reader = getattr(request.app.state, "marketing_sheets_source_reader", UnconfiguredMarketingSheetsReader())
+    source_reader = getattr(request.app.state, "marketing_sheets_source_reader", None) or ApprovedGoogleSheetsReadOnlySourceReader(
+        allowed_source_ids=settings.marketing_readonly_allowed_source_ids,
+        credentials_path=settings.google_application_credentials,
+    )
     try:
         return await attach_google_sheets_readonly_evidence(
             agent_bus_client=client,
