@@ -53,6 +53,14 @@ from app.marketing_summary import (
 )
 from app.marketing_worker import run_marketing_worker_once
 from app.marketing_worker_contract import MarketingWorkerRunOnceRequest, MarketingWorkerRunOnceResponse
+from app.weekly_marketing_snapshot_readonly import (
+    WeeklyMarketingSnapshotReadOnlyValidationError,
+    run_weekly_marketing_snapshot_readonly_workflow,
+)
+from app.weekly_marketing_snapshot_readonly_contract import (
+    WeeklyMarketingSnapshotReadOnlyRunRequest,
+    WeeklyMarketingSnapshotReadOnlyRunResponse,
+)
 
 router = APIRouter(prefix="/api/v1/marketing", tags=["marketing"])
 
@@ -74,6 +82,53 @@ async def mock_weekly_marketing_command_brief(
             agent_bus_client=client,
             mission_control_url=_mission_control_url(settings),
         )
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentBusAPIError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+@router.post(
+    "/workflows/weekly-snapshot/read-only/run",
+    response_model=WeeklyMarketingSnapshotReadOnlyRunResponse,
+)
+async def run_weekly_marketing_snapshot_readonly(
+    payload: WeeklyMarketingSnapshotReadOnlyRunRequest,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> WeeklyMarketingSnapshotReadOnlyRunResponse:
+    if not settings.enable_weekly_marketing_snapshot_readonly:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_WEEKLY_MARKETING_SNAPSHOT_READONLY=true is required before running the weekly snapshot read-only wrapper.",
+        )
+    client, should_close = _agent_bus_client(request, settings)
+    source_reader = getattr(request.app.state, "marketing_sheets_source_reader", None) or ApprovedGoogleSheetsReadOnlySourceReader(
+        allowed_source_ids=settings.marketing_readonly_allowed_source_ids,
+        credentials_path=settings.google_application_credentials,
+    )
+    try:
+        return await run_weekly_marketing_snapshot_readonly_workflow(
+            payload=payload,
+            settings=settings,
+            agent_bus_client=client,
+            source_reader=source_reader,
+            audit_repository=_marketing_evidence_audit_repository(request, settings),
+            mission_control_url=_mission_control_url(settings),
+        )
+    except WeeklyMarketingSnapshotReadOnlyValidationError as exc:
+        response_status = status.HTTP_403_FORBIDDEN if str(exc).startswith("ENABLE_") else status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=response_status, detail=str(exc)) from exc
+    except MarketingSheetsEvidenceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MarketingSheetsSourceReadError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except MarketingGovernanceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MissingAgentBusBaseUrlError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AgentBusAPIError as exc:

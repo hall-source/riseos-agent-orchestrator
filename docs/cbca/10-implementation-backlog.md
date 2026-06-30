@@ -104,6 +104,17 @@
 | Add audit tests | `riseos-agent-orchestrator` | Success, failures, redaction, auth, filters, no-write fields |
 | Defer summary audit counts | `riseos-agent-orchestrator` | Use audit endpoint first; add summary counts later if needed |
 
+## Priority 1H: Weekly Marketing Snapshot Read-Only Wrapper
+
+| Item | Repo | Notes |
+|---|---|---|
+| Add wrapper request/response models | `riseos-agent-orchestrator` | One safe command for the validated weekly snapshot path |
+| Add wrapper service | `riseos-agent-orchestrator` | Creates workflow, attaches Sheets evidence, optionally runs workers/governance |
+| Add admin-protected wrapper endpoint | `riseos-agent-orchestrator` | `POST /api/v1/marketing/workflows/weekly-snapshot/read-only/run` |
+| Add wrapper feature flag | `riseos-agent-orchestrator` | `ENABLE_WEEKLY_MARKETING_SNAPSHOT_READONLY=true` required |
+| Preserve approval boundary | `riseos-agent-orchestrator` | Wrapper never calls the approval endpoint or authorizes production action |
+| Add wrapper tests | `riseos-agent-orchestrator` | Flag, happy path, allowlist failure, missing data item, mock flags, no approval side effect |
+
 ## Priority 2: Agent Bus Evidence API Hardening
 
 | Item | Repo | Notes |
