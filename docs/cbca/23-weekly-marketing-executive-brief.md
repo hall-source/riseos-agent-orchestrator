@@ -81,7 +81,9 @@ ENABLE_WEEKLY_MARKETING_EXECUTIVE_BRIEF=true
 
 ## How It Works
 
-The endpoint loads the existing marketing workflow summary, then deterministically projects it into an executive brief.
+The route validates admin auth and `ENABLE_WEEKLY_MARKETING_EXECUTIVE_BRIEF`, loads the existing marketing workflow summary, and passes that already-loaded data to `app/marketing_executive_brief_builder.py`.
+
+The builder deterministically projects the workflow summary into an executive brief. Keeping the transformation in a dedicated builder makes the same leadership brief logic reusable later for PDF generation, Google Doc generation, Slack summaries, email digests, future LLM narrative overlays, and internal saved artifacts without putting presentation logic in the route handler.
 
 It extracts:
 
@@ -127,7 +129,7 @@ POST /api/v1/marketing/workflows/{workflow_id}/approval
 
 ## Safety Model
 
-This endpoint does not:
+This endpoint and builder do not:
 
 - call OpenAI or ChatGPT
 - call Google Ads
