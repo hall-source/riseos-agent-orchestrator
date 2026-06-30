@@ -37,6 +37,7 @@ class Settings:
     enable_marketing_readonly_evidence: bool = False
     enable_marketing_sheets_readonly_evidence: bool = False
     enable_marketing_evidence_audit: bool = True
+    enable_weekly_marketing_snapshot_readonly: bool = False
     marketing_readonly_allowed_source_ids: tuple[str, ...] = ()
     google_application_credentials: str | None = None
     agent_bus_base_url: str | None = None
@@ -110,6 +111,7 @@ def get_settings() -> Settings:
         enable_marketing_readonly_evidence=_bool_env("ENABLE_MARKETING_READONLY_EVIDENCE"),
         enable_marketing_sheets_readonly_evidence=_bool_env("ENABLE_MARKETING_SHEETS_READONLY_EVIDENCE"),
         enable_marketing_evidence_audit=_bool_env_default("ENABLE_MARKETING_EVIDENCE_AUDIT", True),
+        enable_weekly_marketing_snapshot_readonly=_bool_env("ENABLE_WEEKLY_MARKETING_SNAPSHOT_READONLY"),
         marketing_readonly_allowed_source_ids=_csv_env("MARKETING_READONLY_ALLOWED_SOURCE_IDS"),
         google_application_credentials=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
         agent_bus_base_url=os.getenv("AGENT_BUS_BASE_URL"),
