@@ -21,7 +21,7 @@ from app.marketing_evidence_audit import (
     build_marketing_evidence_audit_event,
 )
 from app.marketing_evidence_audit_contract import MarketingEvidenceAuditListResponse
-from app.marketing_executive_brief import build_weekly_marketing_executive_brief
+from app.marketing_executive_brief_builder import build_weekly_marketing_executive_brief
 from app.marketing_executive_brief_contract import MarketingExecutiveBriefResponse
 from app.marketing_governance import MarketingGovernanceValidationError, run_marketing_governance_once
 from app.marketing_governance_contract import MarketingGovernanceRunOnceRequest, MarketingGovernanceRunOnceResponse
