@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -7,7 +8,9 @@ from fastapi.testclient import TestClient
 from app.clients.agent_bus import AgentBusAPIError
 from app.config import Settings, get_settings
 from app.main import app
+from app.marketing_executive_brief_builder import build_weekly_marketing_executive_brief
 from app.marketing_loop import MARKETING_REPOSITORY, MARKETING_WORKFLOW_TYPE, REVIEW_AGENT, SPECIALIST_AGENTS, SYNTHESIS_AGENT
+from app.marketing_summary import build_marketing_workflow_summary
 
 
 class FakeExecutiveBriefAgentBusClient:
@@ -34,7 +37,7 @@ class FakeExecutiveBriefAgentBusClient:
         return sum(1 for packet in self.evidence_packets.values() if _packet_type(packet) == "human_approval")
 
     def _seed_workflow(self, *, include_analytics: bool, approved: bool) -> None:
-        for index, agent_id in enumerate(SPECIALIST_AGENTS):
+        for agent_id in SPECIALIST_AGENTS:
             item = self._work_item(agent_id, "specialist_evidence", status="completed")
             evidence_type = "analytics_snapshot" if agent_id == "hall-data-intelligence" and include_analytics else "mock_specialist_snapshot"
             content = _analytics_content() if evidence_type == "analytics_snapshot" else _mock_specialist_content(agent_id, evidence_type)
@@ -215,6 +218,17 @@ def _packet_type(packet: dict[str, object]) -> str | None:
     return str(value) if value else None
 
 
+def _summary_from_fake(fake: FakeExecutiveBriefAgentBusClient):
+    return asyncio.run(
+        build_marketing_workflow_summary(
+            fake.workflow_id,
+            agent_bus_client=fake,
+            agent_bus_mission_control_url="http://127.0.0.1:8050/api/v1/mission-control/snapshot",
+            orchestrator_snapshot_url="http://127.0.0.1:8055/api/v1/orchestrator/snapshot",
+        )
+    )
+
+
 def client_with_fake_agent_bus(fake: object, *, enable_brief: bool = True) -> TestClient:
     get_settings.cache_clear()
     app.dependency_overrides[get_settings] = lambda: Settings(
@@ -232,6 +246,54 @@ def teardown_function() -> None:
     if hasattr(app.state, "agent_bus_client"):
         delattr(app.state, "agent_bus_client")
     get_settings.cache_clear()
+
+
+def test_executive_brief_builder_maps_deterministic_content_channels_and_risks() -> None:
+    fake = FakeExecutiveBriefAgentBusClient(approved=False)
+    brief = build_weekly_marketing_executive_brief(_summary_from_fake(fake))
+
+    assert brief.executive_summary.headline == "Weekly marketing snapshot is ready for review."
+    assert brief.scorecard == {
+        "leads": 42,
+        "contacts_created": 38,
+        "deals_created": 6,
+        "sessions": 1200,
+        "deal_created_rate_from_leads": 0.1429,
+    }
+    assert brief.channel_breakdown[0] == {
+        "source": "paid_search",
+        "leads": 18,
+        "contacts_created": 16,
+        "deals_created": 3,
+        "sessions": 450,
+    }
+    assert brief.findings == [
+        "Read-only source reported 42 leads and 6 deals created.",
+        "Deal-created rate from leads is 0.1429.",
+    ]
+    assert brief.review.risk_flags == ["mock_only_no_business_decisions"]
+    assert brief.review.approval_recommendation == "ready_for_hq_synthesis_mock_only"
+    assert brief.recommended_next_action == "Hall should review the synthesis and approve or request changes."
+
+
+def test_executive_brief_builder_maps_approved_guidance() -> None:
+    fake = FakeExecutiveBriefAgentBusClient(approved=True)
+    brief = build_weekly_marketing_executive_brief(_summary_from_fake(fake))
+
+    assert brief.status == "completed"
+    assert brief.approval_state == "approved_mock_only"
+    assert brief.human_approval_complete is True
+    assert brief.executive_summary.headline == "Weekly marketing snapshot has been approved."
+    assert brief.recommended_next_action == "Mock workflow has been validated. No production action has been authorized."
+
+
+def test_executive_brief_builder_returns_partial_brief_without_analytics() -> None:
+    fake = FakeExecutiveBriefAgentBusClient(include_analytics=False)
+    brief = build_weekly_marketing_executive_brief(_summary_from_fake(fake))
+
+    assert brief.scorecard == {}
+    assert brief.channel_breakdown == []
+    assert brief.findings == ["Analytics snapshot evidence is not available for this workflow."]
 
 
 def test_executive_brief_feature_flag_disabled_returns_403_without_mutation() -> None:
