@@ -21,6 +21,8 @@ from app.marketing_evidence_audit import (
     build_marketing_evidence_audit_event,
 )
 from app.marketing_evidence_audit_contract import MarketingEvidenceAuditListResponse
+from app.marketing_executive_brief import build_weekly_marketing_executive_brief
+from app.marketing_executive_brief_contract import MarketingExecutiveBriefResponse
 from app.marketing_governance import MarketingGovernanceValidationError, run_marketing_governance_once
 from app.marketing_governance_contract import MarketingGovernanceRunOnceRequest, MarketingGovernanceRunOnceResponse
 from app.marketing_loop import (
@@ -378,6 +380,48 @@ async def get_mock_marketing_approval(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AgentBusAPIError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+@router.get(
+    "/workflows/{workflow_id}/executive-brief",
+    response_model=MarketingExecutiveBriefResponse,
+)
+async def marketing_workflow_executive_brief(
+    workflow_id: str,
+    request: Request,
+    _: None = Depends(require_orchestrator_admin_token),
+    settings: Settings = Depends(get_settings),
+) -> MarketingExecutiveBriefResponse:
+    if not settings.enable_weekly_marketing_executive_brief:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ENABLE_WEEKLY_MARKETING_EXECUTIVE_BRIEF=true is required before reading the weekly marketing executive brief.",
+        )
+    client, should_close = _agent_bus_client(request, settings)
+    try:
+        summary = await build_marketing_workflow_summary(
+            workflow_id,
+            agent_bus_client=client,
+            agent_bus_mission_control_url=_mission_control_url(settings),
+            orchestrator_snapshot_url=_orchestrator_snapshot_url(settings),
+        )
+        return build_weekly_marketing_executive_brief(_with_governance_next_action(summary))
+    except MarketingWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketing workflow not found") from exc
+    except MissingAgentBusBaseUrlError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "agent_bus_unavailable", "message": str(exc)},
+        ) from exc
+    except AgentBusAPIError as exc:
+        response_status = status.HTTP_503_SERVICE_UNAVAILABLE if exc.status_code >= 500 else status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(
+            status_code=response_status,
+            detail={"status": "agent_bus_unavailable", "message": str(exc)},
+        ) from exc
     finally:
         if should_close:
             await client.aclose()
