@@ -147,11 +147,45 @@ def evidence_packet_for_type(fake: FakeAgentBusClient, artifact_type: str) -> di
     raise AssertionError(f"No evidence packet found for artifact type {artifact_type}")
 
 
-def mark_human_approved(fake: FakeAgentBusClient) -> None:
+def mark_human_approved(fake: FakeAgentBusClient, workflow_id: str) -> None:
     item = work_item_for_role(fake, "hq_synthesis")
+    synthesis_artifact = evidence_packet_for_type(fake, "synthesis_memo")
+    evidence_id = str(uuid4())
+    approval_packet = {
+        "evidence_id": evidence_id,
+        "work_item_id": item["work_item_id"],
+        "repository": "hall-source/riseos-agent-orchestrator",
+        "implementation_agent": "Hall",
+        "test_results": {
+            "artifact_type": "human_approval",
+            "evidence_type": "human_approval",
+            "workflow_id": workflow_id,
+            "decision": "approve_mock",
+            "approval_state": "approved_mock_only",
+            "approved_by": "Hall",
+            "notes": "Mock synthesis reviewed. Safe to proceed to the next development step.",
+            "approved_artifact_id": synthesis_artifact["evidence_id"],
+            "approved_artifact_type": "synthesis_memo",
+            "mock_mode": True,
+            "confidence": "mock_only",
+            "live_platform_access": False,
+            "no_production_write_performed": True,
+            "no_external_platform_action_performed": True,
+            "not_for_real_marketing_decisions": True,
+            "created_at": "2026-06-24T18:05:00Z",
+        },
+        "verification_summary": "Human mock approval decision recorded. No production action was performed.",
+        "assumptions": ["This is a mock approval record only."],
+        "unverified_items": ["Approval does not authorize production marketing action."],
+    }
+    fake.evidence_packets.append(approval_packet)
     metadata = item.setdefault("metadata", {})
     assert isinstance(metadata, dict)
-    metadata["human_approval_status"] = "approved"
+    metadata.setdefault("evidence_packet_ids", []).append(evidence_id)
+    metadata["human_approval_status"] = "approved_mock_only"
+    metadata["human_approval_artifact_id"] = evidence_id
+    metadata["human_approval_decision"] = "approve_mock"
+    metadata["no_production_write_performed"] = True
 
 
 def test_mock_weekly_marketing_command_brief_requires_admin_token() -> None:
@@ -402,6 +436,7 @@ def test_marketing_workflow_summary_readiness_flags_are_true_when_review_and_syn
         "review_complete": True,
         "synthesis_complete": True,
         "human_approval_ready": True,
+        "human_approval_complete": False,
     }
     assert data["missing"] == []
     assert data["next_action"] == "Hall can review the mock HQ synthesis memo. No production action is allowed from mock evidence."
@@ -410,7 +445,7 @@ def test_marketing_workflow_summary_readiness_flags_are_true_when_review_and_syn
 def test_marketing_workflow_summary_next_action_reaches_completed_after_human_approval() -> None:
     client, fake = client_with_fake_agent_bus()
     workflow_id = run_mock_workflow(client)
-    mark_human_approved(fake)
+    mark_human_approved(fake, workflow_id)
 
     response = client.get(
         f"/api/v1/marketing/workflows/{workflow_id}/summary",
@@ -420,9 +455,11 @@ def test_marketing_workflow_summary_next_action_reaches_completed_after_human_ap
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "completed"
-    assert data["readiness"]["human_approval_ready"] is False
+    assert data["readiness"]["human_approval_ready"] is True
+    assert data["readiness"]["human_approval_complete"] is True
+    assert data["human_approval"]["state"] == "approved_mock_only"
     assert data["missing"] == []
-    assert data["next_action"] == "Marketing workflow summary is complete."
+    assert data["next_action"] == "Mock workflow approved. No production action was performed. Next development step can begin."
 
 
 def test_mock_only_safeguards_are_present_on_review_and_synthesis_artifacts() -> None:
